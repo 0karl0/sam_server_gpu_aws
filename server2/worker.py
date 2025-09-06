@@ -4,7 +4,6 @@ import json
 import cv2
 import gc
 import numpy as np
-import runpod
 from PIL import Image
 from rembg import remove, new_session
 from segment_anything import (
@@ -42,9 +41,9 @@ except Exception:  # pragma: no cover - torch may not be installed
 # Config / directories
 # -------------------------
 # Base directory for shared storage, overridable via SHARED_DIR env var to
-# point at a network-mounted location (e.g., S3 or EFS) accessible from both
-# Server1 on EC2 and this RunPod worker.
-SHARED_DIR = os.getenv("SHARED_DIR", "/mnt/shared")
+# point at a network-mounted location (e.g., EFS) accessible from both
+# Server1 and this GPU worker.
+SHARED_DIR = os.getenv("SHARED_DIR", "/mnt/efs")
 RESIZED_DIR = os.path.join(SHARED_DIR, "resized")
 MASKS_DIR = os.path.join(SHARED_DIR, "output", "masks")
 SMALLS_DIR = os.path.join(SHARED_DIR, "output", "smalls")
@@ -496,17 +495,14 @@ def process_new_images() -> int:
     return count
 
 
-def handler(job):  # type: ignore
-    """RunPod serverless handler."""
-    try:
-        _ = job.get("input", {})
-    except Exception as e:
-        return {"status": "error", "message": f"Invalid input: {e}"}
-    try:
+def main() -> None:
+    while True:
         processed = process_new_images()
-        return {"status": "success", "processed": processed}
-    except Exception as e:  # pragma: no cover - best effort
-        return {"status": "error", "message": str(e)}
+        if processed == 0:
+            time.sleep(5)
+        else:
+            time.sleep(1)
 
 
-runpod.serverless.start({"handler": handler})
+if __name__ == "__main__":
+    main()
