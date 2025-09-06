@@ -1,0 +1,11 @@
+*.pth
+*.jpg
+*.jpeg
+*.png
+*.heic
+*.heif
+*.instruction
+*.sh
+*.json
+*.deb
+*.gz

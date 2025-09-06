@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SAM Studio</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/konva@9/konva.min.js"></script>
+  <style>
+    :root{
+      --bg:#0b0c10; --panel:#12141a; --muted:#1a1d25; --text:#e9eef7; --sub:#9fb0c7;
+      --accent:#6aa6ff; --ring:rgba(122,194,255,.35);
+      --radius:14px; --shadow:0 10px 25px rgba(0,0,0,.35);
+    }
+    *{box-sizing:border-box}
+    body{margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Apple Color Emoji","Segoe UI Emoji";}
+    header{position:sticky; top:0; z-index:50; background:linear-gradient(180deg,rgba(255,255,255,.04),transparent); backdrop-filter: blur(8px);}
+    .wrap{max-width:1400px; margin:0 auto; padding:16px;}
+    .bar{display:flex; gap:12px; align-items:center; flex-wrap:wrap;}
+    .card{background:var(--panel); border:1px solid var(--muted); border-radius:var(--radius); box-shadow:var(--shadow)}
+    .btn{appearance:none; border:1px solid var(--muted); background:linear-gradient(180deg, #1e2230, #171b25); color:var(--text); padding:10px 14px; border-radius:10px; cursor:pointer}
+    .btn:hover{border-color:var(--accent); box-shadow:0 0 0 3px var(--ring)}
+    .btn.ghost{background:transparent}
+    input[type="file"], select, input[type="number"], input[type="range"]{
+      background:#151926; border:1px solid var(--muted); color:var(--text); border-radius:10px; padding:8px 10px; outline:none;
+    }
+    input[type="range"]{height:34px}
+    .grid{display:grid; grid-template-columns:1fr; gap:16px}
+    @media(min-width:1024px){ .grid{grid-template-columns:380px 1fr} }
+    .grid.hide-gallery{grid-template-columns:1fr !important}
+
+    /* Albums (originals + crops) */
+    .albums{padding:12px}
+    .album{background:var(--panel); border:1px solid var(--muted); border-radius:12px; overflow:hidden; margin-bottom:12px}
+    .albumHead{display:flex; gap:12px; align-items:center; padding:10px 12px; cursor:pointer}
+    .albumHead:hover{background:#161a27}
+    .thumb{width:96px; height:96px; object-fit:contain; object-position:center; background:#0e1017; border:1px solid var(--muted); border-radius:10px}
+    .meta{display:flex; flex-direction:column}
+    .meta b{font-size:13px}
+    .meta span{color:var(--sub); font-size:12px}
+    .albumBody{display:none; padding:10px 12px 14px}
+    .chips{display:flex; gap:10px; flex-wrap:wrap}
+    .chip{border-radius:10px; padding:8px; background:#0f1320; border:1px solid var(--muted)}
+    .chip img{width:96px; height:96px; object-fit:contain; cursor:pointer}
+
+    /* Right panel / Canvas */
+    .canvasWrap{padding:12px}
+    #canvasToolbar{display:flex; gap:8px; padding:10px; border-bottom:1px solid var(--muted); flex-wrap:wrap}
+    #canvasContainer{height:70vh; border-radius:12px; border:1px solid var(--muted); background:#0e1119}
+
+ /* Floating canvas controls */
+  #floatingControls {
+    position: absolute;
+    right: 20px;
+    bottom: 20px;
+    z-index: 100;
+    display: flex;
+    gap: 8px;
+    background: rgba(18,20,26,.9);
+    border: 1px solid #1a1d25;
+    border-radius: 12px;
+    padding: 8px;
+    box-shadow: 0 10px 25px rgba(0,0,0,.35);
+    touch-action: none; /* so it can be dragged on mobile */
+  }
+  #floatingControls .btn { padding: 8px 10px; }
+  #floatingControls .handle {
+    width: 16px; height: 16px; border-radius: 4px;
+    background: #1a1d25; margin-right: 6px; cursor: grab;
+  }
+    .relative-container {
+      position: relative; /* so floating controls can anchor */
+    }
+
+    /* Collapsible panels */
+    details.card{padding:8px 10px;}
+    details.card>summary{cursor:pointer; user-select:none;}
+
+  </style>
+</head>
+<body>
+    <header>
+      <div class="wrap bar">
+        <a href="/logout" class="btn ghost">Logout</a>
+        <!-- Upload Queue -->
+        <details class="card" id="uploadSection">
+          <summary>Upload</summary>
+          <form id="uploadForm" style="margin-top:8px; display:flex; gap:10px; align-items:center;">
+            <input type="file" name="file" accept="image/*,.heic,.HEIC" multiple />
+            <button class="btn" type="submit">Add to Queue</button>
+          </form>
+          <div id="queueStatus" style="margin-top:4px; color:var(--sub); font-size:12px;"></div>
+        </details>
+
+        <!-- SAM Controls -->
+        <details class="card" id="samSection">
+          <summary>SAM Controls</summary>
+          <div style="margin-top:8px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <label>Model
+              <select id="model_type">
+                <option value="vit_b">ViT-B</option>
+                <option value="vit_l">ViT-L</option>
+                <option value="vit_h">ViT-H</option>
+              </select>
+            </label>
+            <label>Points
+              <input type="range" id="points_slider" min="8" max="128" value="32" />
+              <input type="number" id="points_input" min="8" max="128" value="32" style="width:80px" />
+            </label>
+            <label>IoU
+              <input type="range" id="iou_slider" min="0.5" max="0.99" step="0.01" value="0.88" />
+              <input type="number" id="iou_input" min="0.5" max="0.99" step="0.01" value="0.88" style="width:80px" />
+            </label>
+            <label>Stability
+              <input type="range" id="stab_slider" min="0.5" max="0.99" step="0.01" value="0.95" />
+              <input type="number" id="stab_input" min="0.5" max="0.99" step="0.01" value="0.95" style="width:80px" />
+            </label>
+            <label>Crop layers
+              <input type="number" id="crop_layers" min="0" max="3" value="1" style="width:80px" />
+            </label>
+            <button class="btn" id="saveBtn" type="button">Save settings</button>
+          </div>
+        </details>
+
+        <button class="btn ghost" id="toggleGallery">Hide Originals & Clippings</button>
+        <button class="btn ghost" id="clearProcessed">Clear Processed</button>
+
+      </div>
+    </header>
+
+  <main id="mainGrid" class="wrap grid hide-gallery">
+    <!-- LEFT: Albums / Originals -->
+    <section class="card albums" id="albumsSection" style="display:none;">
+      <h3 style="margin:4px 0 12px 2px; color:var(--sub);">Originals & Clippings</h3>
+      <div id="albums"></div>
+    </section>
+
+    <!-- RIGHT: Canvas -->
+    <section class="card canvasWrap">
+      <div id="canvasToolbar">
+        <button class="btn" id="zoomIn">Zoom +</button>
+        <button class="btn" id="zoomOut">Zoom −</button>
+        <button class="btn ghost" id="fit">Fit</button>
+        <button class="btn ghost" id="clear">Clear</button>
+        <button class="btn ghost" id="toFront">Bring to Front</button>
+        <button class="btn ghost" id="toBack">Send to Back</button>
+        <button class="btn ghost" id="stepForward">Step Forward</button>
+        <button class="btn ghost" id="stepBackward">Step Backward</button>
+<label>Canvas Size (in)
+  <input type="number" id="canvasWidthIn" min="1" max="50" value="20" style="width:60px"> ×
+  <input type="number" id="canvasHeightIn" min="1" max="50" value="20" style="width:60px">
+</label>
+<button class="btn ghost" id="applyCanvasSize">Set</button>
+
+
+        <button class="btn" id="download">Download PNG</button>
+      </div>
+<div class="relative-container" style="position:relative;">
+  <div id="canvasContainer"></div>
+
+  <!-- Floating, draggable controls -->
+  <div id="floatingControls" class="card">
+    <div class="handle" title="Drag toolbar"></div>
+    <button class="btn" id="fcZoomIn">+</button>
+    <button class="btn" id="fcZoomOut">−</button>
+    <button class="btn ghost" id="fcFit">Fit</button>
+    <button class="btn ghost" id="fcPanToggle" title="Toggle pan mode (Space)">Pan</button>
+    <button class="btn ghost" id="fcReset">Reset</button>
+  </div>
+</div>
+
+
+
+    </section>
+  </main>
+
+  <script>
+    // ---------- settings ----------
+    async function loadSettings(){
+      const r = await fetch("/get_settings"); const s = await r.json();
+      (document.getElementById("model_type").value = s.model_type || "vit_b");
+      const setPair=(sid,iid,val)=>{document.getElementById(sid).value=val;document.getElementById(iid).value=val;}
+      setPair("points_slider","points_input",s.points_per_side ?? 32);
+      setPair("iou_slider","iou_input",s.pred_iou_thresh ?? 0.88);
+      setPair("stab_slider","stab_input",s.stability_score_thresh ?? 0.95);
+      document.getElementById("crop_layers").value = s.crop_n_layers ?? 1;
+    }
+    function syncPair(sliderId,inputId,min,max,step=1){
+      const sl=document.getElementById(sliderId), inp=document.getElementById(inputId);
+      sl.addEventListener("input", ()=> inp.value = sl.value);
+      inp.addEventListener("input", ()=> {
+        let v=parseFloat(inp.value); if(isNaN(v)) v=parseFloat(sl.value);
+        v=Math.max(min,Math.min(max,v)); if(step!==1) v=Math.round(v/step)*step;
+        inp.value=v; sl.value=v;
+      });
+    }
+    syncPair("points_slider","points_input",8,128,1);
+    syncPair("iou_slider","iou_input",0.5,0.99,0.01);
+    syncPair("stab_slider","stab_input",0.5,0.99,0.01);
+
+    document.getElementById("saveBtn").addEventListener("click", async ()=>{
+      const payload = {
+        model_type: document.getElementById("model_type").value,
+        points_per_side: parseInt(document.getElementById("points_input").value),
+        pred_iou_thresh: parseFloat(document.getElementById("iou_input").value),
+        stability_score_thresh: parseFloat(document.getElementById("stab_input").value),
+        crop_n_layers: parseInt(document.getElementById("crop_layers").value),
+      };
+      await fetch("/save_settings",{method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+      alert("Settings saved");
+    });
+
+    // ---------- upload queue ----------
+    const uploadQueue = [];
+    let uploading = false;
+    const queueStatus = document.getElementById("queueStatus");
+
+    function updateQueueStatus(){
+      if(uploading){
+        queueStatus.textContent = `Uploading... ${uploadQueue.length} left`;
+      } else if(uploadQueue.length>0){
+        queueStatus.textContent = `${uploadQueue.length} queued`;
+      } else {
+        queueStatus.textContent = "";
+      }
+    }
+
+    async function processQueue(){
+      if(uploading) return;
+      uploading = true;
+      while(uploadQueue.length>0){
+        updateQueueStatus();
+        const file = uploadQueue.shift();
+        const fd = new FormData();
+        fd.append("file", file, file.name);
+        const res = await fetch("/upload",{method:"POST", body:fd, headers:{Accept:"application/json"}});
+        if(!res.ok){ console.error("Upload failed for", file.name); }
+        await refreshAlbums();
+      }
+      uploading = false;
+      updateQueueStatus();
+    }
+
+    document.getElementById("uploadForm").addEventListener("submit", (e)=>{
+      e.preventDefault();
+      const input = e.target.querySelector('input[name="file"]');
+      const files = input.files;
+      for(const f of files) uploadQueue.push(f);
+      input.value = "";
+      updateQueueStatus();
+      processQueue();
+    });
+
+    // ---------- toggle gallery ----------
+    const toggleBtn = document.getElementById("toggleGallery");
+    const albumsSection = document.getElementById("albumsSection");
+    const mainGrid = document.getElementById("mainGrid");
+    toggleBtn.addEventListener("click", () => {
+      const hidden = albumsSection.style.display === "none";
+      if (hidden) {
+        albumsSection.style.display = "block";
+        mainGrid.classList.remove("hide-gallery");
+        toggleBtn.textContent = "Hide Originals & Clippings";
+      } else {
+        albumsSection.style.display = "none";
+        mainGrid.classList.add("hide-gallery");
+        toggleBtn.textContent = "Show Originals & Clippings";
+      }
+
+    });
+
+    const clearBtn = document.getElementById("clearProcessed");
+    clearBtn.addEventListener("click", async ()=>{
+      if(!confirm("Delete all processed images?")) return;
+      await fetch("/clear_all", {method:"POST"});
+      autoAdded.clear();
+      layer.destroyChildren();
+      layer.add(tr);
+      layer.batchDraw();
+      refreshAlbums();
+    });
+
+    // ---------- albums (originals + crops) ----------
+    const openState = {};  // { "file.png": true/false }
+    let lastUserAction = 0;
+
+    async function refreshAlbums(){
+      const r = await fetch("/list_originals"); const albums = await r.json();
+      const host = document.getElementById("albums");
+      host.innerHTML = "";
+
+      albums.forEach(a=>{
+        const card = document.createElement("div"); card.className="album";
+
+        const head = document.createElement("div");
+        head.className="albumHead"; head.dataset.original = a.original;
+        const isOpen = !!openState[a.original]; const arrow = isOpen ? "▲" : "▼";
+        head.innerHTML = `
+          <div class="thumbWrap" style="position:relative;">
+            <img class="thumb" src="${a.thumb_url}" alt="">
+          </div>
+          <div class="meta">
+            <b>${a.original}</b>
+            <span>${a.crops.length} clipping${a.crops.length===1?"":"s"}</span>
+          </div>
+          <div class="arrow" style="margin-left:auto;color:var(--sub);">${arrow}</div>
+        `;
+
+        // overlay YOLO points as stars on thumbnail
+        if(a.yolo && a.yolo.points && a.yolo.points.length){
+          const tw=head.querySelector('.thumbWrap');
+          const w=a.yolo.width, h=a.yolo.height; const box=96;
+          let sw,sh,offX,offY;
+          if(w>=h){
+            sw=box; sh=h*(box/w); offX=0; offY=(box-sh)/2;
+          }else{
+            sh=box; sw=w*(box/h); offX=(box-sw)/2; offY=0;
+          }
+          a.yolo.points.forEach(pt=>{
+            const star=document.createElement('div');
+            star.textContent='★';
+            star.style.position='absolute';
+            star.style.color='yellow';
+            // use a larger font size so markers remain visible on the thumbnail
+            const size = 24; // px
+            star.style.fontSize = `${size}px`;
+            const x=offX + (pt[0]/w)*sw; const y=offY + (pt[1]/h)*sh;
+            // center the star around the detected point
+            star.style.left=`${x-size/2}px`; star.style.top=`${y-size/2}px`;
+            tw.appendChild(star);
+          });
+        }
+
+        const body = document.createElement("div");
+        body.className="albumBody"; body.style.display = isOpen ? "block" : "none";
+
+        const chips = document.createElement("div"); chips.className="chips";
+        if(a.crops.length===0){
+          const empty=document.createElement("div"); empty.className="chip"; empty.textContent="No clippings yet.";
+          chips.appendChild(empty);
+        }else{
+          a.crops.forEach(c=>{
+            const chip=document.createElement("div"); chip.className="chip";
+            const img=document.createElement("img"); img.src=c.thumb_url; img.alt=c.file; img.title="Add to canvas";
+            img.onclick=()=> addToCanvas(c.url);
+            chip.appendChild(img); chips.appendChild(chip);
+          });
+        }
+        body.appendChild(chips);
+
+        head.addEventListener("click", ()=>{
+          const key=head.dataset.original;
+          const nowOpen = !(openState[key]);
+          openState[key]=nowOpen;
+          body.style.display = nowOpen ? "block" : "none";
+          head.querySelector(".arrow").textContent = nowOpen ? "▲" : "▼";
+          lastUserAction = Date.now();
+        });
+
+        card.appendChild(head); card.appendChild(body);
+        host.appendChild(card);
+      });
+      autoAddBiggestCrops(albums);
+    }
+
+    // initial + polling (debounced while interacting)
+    refreshAlbums();
+    setInterval(()=>{ if(Date.now()-lastUserAction>1200) refreshAlbums(); }, 2000);
+
+   // ---------- Konva stage ----------
+  const container = document.getElementById("canvasContainer");
+  const stage = new Konva.Stage({
+    container: "canvasContainer",
+    width: container.clientWidth,
+    height: container.clientHeight,
+    draggable: false, // we'll manage pan ourselves for consistency
+  });
+  const layer = new Konva.Layer();
+  stage.add(layer);
+
+  // Shared transformer & selection
+  const tr = new Konva.Transformer({
+    rotateEnabled: true,
+    keepRatio: true,
+    enabledAnchors: ["top-left","top-right","bottom-left","bottom-right"],
+  });
+  layer.add(tr);
+
+  let selectedNode = null;
+  function selectNode(node){
+    selectedNode = node || null;
+    tr.nodes(selectedNode ? [selectedNode] : []);
+    layer.batchDraw();
+  }
+  stage.on("click tap", (e)=>{ if(e.target===stage) selectNode(null); });
+
+  const autoAdded = new Set();
+
+  function placeImageOnCanvas(img, x, y){
+    const node = new Konva.Image({
+      image: img,
+      x: x,
+      y: y,
+      draggable: true,
+    });
+    layer.add(node);
+    node.moveToTop();
+    node.on("click tap", ()=> selectNode(node));
+    node.on("transformend", ()=>{
+      const sx=node.scaleX(), sy=node.scaleY();
+      node.width(Math.max(1, node.width()*sx));
+      node.height(Math.max(1, node.height()*sy));
+      node.scale({x:1,y:1});
+      layer.batchDraw();
+    });
+    selectNode(node);
+  }
+
+  // ---------- Add image at actual pixel size ----------
+  function addToCanvas(url){
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = function(){
+      placeImageOnCanvas(img, stage.width()/2 - img.width/2, stage.height()/2 - img.height/2);
+    };
+    img.src = url;
+  }
+
+  function addToCanvasRandom(url){
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = function(){
+      const x = Math.random() * Math.max(0, stage.width() - img.width);
+      const y = Math.random() * Math.max(0, stage.height() - img.height);
+      placeImageOnCanvas(img, x, y);
+    };
+    img.src = url;
+  }
+
+  function autoAddBiggestCrops(albums){
+    albums.forEach(a=>{
+      if(!a.crops) return;
+      const sorted=[...a.crops].sort((a,b)=> (b.area||0)-(a.area||0));
+      sorted.slice(0,3).forEach(c=>{
+        if(!autoAdded.has(c.file)){
+          addToCanvasRandom(c.url);
+          autoAdded.add(c.file);
+        }
+      });
+    });
+  }
+
+  // ---------- View helpers (zoom/pan/fit/reset) ----------
+  const MIN_SCALE = 0.1;
+  const MAX_SCALE = 6;
+
+  function setScaleAt(point, nextScale){
+    nextScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, nextScale));
+    const oldScale = stage.scaleX() || 1;
+    const mousePointTo = {
+      x: (point.x - stage.x()) / oldScale,
+      y: (point.y - stage.y()) / oldScale
+    };
+    stage.scale({ x: nextScale, y: nextScale });
+    const newPos = {
+      x: point.x - mousePointTo.x * nextScale,
+      y: point.y - mousePointTo.y * nextScale
+    };
+    stage.position(newPos);
+    stage.batchDraw();
+  }
+
+  function fitView(){
+    stage.scale({x:1,y:1});
+    stage.position({x:0,y:0});
+    stage.batchDraw();
+  }
+  function resetView(){
+    fitView();
+    selectNode(null);
+  }
+
+  // ---------- Mouse: wheel zoom (centered), pan (space/middle/right) ----------
+  let isPanning = false;
+  let panOrigin = null;
+
+  function shouldPanMouse(e){
+    return isPanning || e.evt.buttons === 4 /* middle */ || e.evt.buttons === 2 /* right */;
+  }
+
+  // wheel zoom (with nice damping)
+  stage.on("wheel", (e)=>{
+    e.evt.preventDefault();
+    const oldScale = stage.scaleX() || 1;
+    const delta = e.evt.deltaY;
+    const scaleBy = 1.06;
+    const pointer = stage.getPointerPosition() || {x: stage.width()/2, y: stage.height()/2};
+    const nextScale = delta > 0 ? oldScale / scaleBy : oldScale * scaleBy;
+    setScaleAt(pointer, nextScale);
+  });
+
+  // pan with drag (space/middle/right)
+  function startPan(pos){ panOrigin = pos; }
+  function updatePan(pos){
+    if (!panOrigin) return;
+    const dx = pos.x - panOrigin.x;
+    const dy = pos.y - panOrigin.y;
+    stage.x(stage.x() + dx);
+    stage.y(stage.y() + dy);
+    stage.batchDraw();
+    panOrigin = pos;
+  }
+  function endPan(){ panOrigin = null; }
+
+  stage.on("mousedown touchstart", (e)=>{
+    const pos = stage.getPointerPosition();
+    if (!pos) return;
+
+    // desktop: middle/right button OR explicit pan mode OR Space pressed
+    const spacePressed = !!window._spaceHeld;
+    if (shouldPanMouse(e) || spacePressed || panMode) {
+      startPan(pos);
+    }
+  });
+  stage.on("mousemove touchmove", (e)=>{
+    const pos = stage.getPointerPosition();
+    if (!pos) return;
+    if (panOrigin && !pinching) updatePan(pos);
+  });
+  stage.on("mouseup touchend", ()=> endPan());
+
+  // Space to pan (desktop)
+  window.addEventListener("keydown", (ev)=>{ if (ev.code === "Space") { window._spaceHeld = true; }});
+  window.addEventListener("keyup",   (ev)=>{ if (ev.code === "Space") { window._spaceHeld = false; endPan(); }});
+
+  // ---------- Touch: pinch-to-zoom + two-finger pan ----------
+  let pinching = false;
+  let lastPinchDist = 0;
+  let startScale = 1;
+
+  function getTouches(e){
+    const t = e.evt.touches;
+    return t ? Array.from(t).map(tt => ({ x: tt.clientX, y: tt.clientY })) : [];
+  }
+  function distance(a, b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+  function midpoint(a, b){ return { x:(a.x+b.x)/2, y:(a.y+b.y)/2 }; }
+
+  stage.on("touchstart", (e)=>{
+    const touches = getTouches(e);
+    if (touches.length === 2) {
+      pinching = true;
+      lastPinchDist = distance(touches[0], touches[1]);
+      startScale = stage.scaleX() || 1;
+    }
+  });
+
+  stage.on("touchmove", (e)=>{
+    const touches = getTouches(e);
+    if (touches.length === 2) {
+      e.evt.preventDefault(); // prevent page scroll
+      const newDist = distance(touches[0], touches[1]);
+      if (!lastPinchDist) lastPinchDist = newDist;
+
+      const center = midpoint(touches[0], touches[1]);
+      const scale = startScale * (newDist / lastPinchDist);
+      setScaleAt(center, scale);
+      // two-finger pan: we already keep the center under the fingers by setScaleAt,
+      // and the natural finger movement shifts the stage via the position math above.
+    }
+  });
+
+  stage.on("touchend", ()=>{
+    pinching = false;
+    lastPinchDist = 0;
+  });
+
+  // ---------- Floating controls ----------
+  let panMode = false; // explicit pan toggle for mobile
+  document.getElementById("fcZoomIn").onclick  = ()=> setScaleAt({x:stage.width()/2,y:stage.height()/2}, (stage.scaleX()||1)*1.2);
+  document.getElementById("fcZoomOut").onclick = ()=> setScaleAt({x:stage.width()/2,y:stage.height()/2}, (stage.scaleX()||1)/1.2);
+  document.getElementById("fcFit").onclick     = ()=> fitView();
+  document.getElementById("fcReset").onclick   = ()=> resetView();
+  document.getElementById("fcPanToggle").onclick = ()=>{
+    panMode = !panMode;
+    document.getElementById("fcPanToggle").classList.toggle("active", panMode);
+  };
+
+  // Make floating controls draggable
+  (function makeToolbarDraggable(){
+    const fc = document.getElementById("floatingControls");
+    const handle = fc.querySelector(".handle");
+    let dragging = false, startX=0, startY=0, baseLeft=0, baseTop=0;
+
+    function onDown(e){
+      dragging = true;
+      const rect = fc.getBoundingClientRect();
+      baseLeft = rect.left + window.scrollX;
+      baseTop  = rect.top + window.scrollY;
+      const pt = (e.touches && e.touches[0]) || e;
+      startX = pt.clientX; startY = pt.clientY;
+      e.preventDefault();
+    }
+    function onMove(e){
+      if (!dragging) return;
+      const pt = (e.touches && e.touches[0]) || e;
+      const dx = pt.clientX - startX;
+      const dy = pt.clientY - startY;
+      fc.style.left = (baseLeft + dx) + "px";
+      fc.style.top  = (baseTop  + dy) + "px";
+      fc.style.right = "auto"; fc.style.bottom = "auto";
+    }
+    function onUp(){ dragging = false; }
+
+    handle.addEventListener("mousedown", onDown);
+    handle.addEventListener("touchstart", onDown, {passive:false});
+    window.addEventListener("mousemove", onMove, {passive:false});
+    window.addEventListener("touchmove", onMove, {passive:false});
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchend", onUp);
+  })();
+
+  // ---------- Responsive canvas ----------
+  window.addEventListener("resize", ()=>{
+    stage.width(container.clientWidth);
+    stage.height(container.clientHeight);
+    layer.draw();
+  });
+
+  // Keep your existing download/clear/z-order handlers (or remap to floating controls if desired)
+  // Example z-order helpers you already had:
+  const withSelected = fn => { if(selectedNode){ fn(selectedNode); layer.batchDraw(); } };
+  document.getElementById("toFront")?.addEventListener("click", ()=> withSelected(n=> n.moveToTop()));
+  document.getElementById("toBack")?.addEventListener("click",  ()=> withSelected(n=> n.moveToBottom()));
+  document.getElementById("stepForward")?.addEventListener("click", ()=> withSelected(n=> n.moveUp()));
+  document.getElementById("stepBackward")?.addEventListener("click",()=> withSelected(n=> n.moveDown()));
+  document.getElementById("download")?.addEventListener("click", ()=>{
+    const dataURL = stage.toDataURL({ pixelRatio: 2 });
+    const a = document.createElement("a"); a.href=dataURL; a.download="canvas.png"; a.click();
+  });
+
+    // boot
+    loadSettings();
+  </script>
+</body>
+</html>

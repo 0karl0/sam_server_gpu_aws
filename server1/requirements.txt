@@ -1,0 +1,7 @@
+flask
+requests
+pillow
+opencv-python
+numpy
+pillow-heif
+boto3
