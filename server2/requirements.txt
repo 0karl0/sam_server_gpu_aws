@@ -5,8 +5,6 @@ torchvision
 git+https://github.com/facebookresearch/segment-anything.git
 rembg[gpu]
 ultralytics
-# RunPod serverless runtime
-runpod
 #birefnet
 
 #segment-anything  # if pip-installable, else clone from github in Dockerfile

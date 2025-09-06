@@ -28,10 +28,10 @@ import pillow_heif  # enables HEIC/HEIF decode in Pillow
 # -------------------------
 # Paths / Constants
 # -------------------------
-# Base directory for shared storage. Defaults to "/mnt/shared" but can be
+# Base directory for shared storage. Defaults to "/mnt/efs" but can be
 # overridden via the SHARED_DIR environment variable so both servers can point
-# to a common network location (e.g., an EFS mount or s3fs bucket on EC2).
-SHARED_DIR   = os.getenv("SHARED_DIR", "/models")
+# to a common network location (e.g., an EFS mount).
+SHARED_DIR   = os.getenv("SHARED_DIR", "/mnt/efs")
 INPUT_DIR    = os.path.join(SHARED_DIR, "input")              # originals (PNG-normalized)
 RESIZED_DIR  = os.path.join(SHARED_DIR, "resized")            # ≤1024 for SAM
 MASKS_DIR    = os.path.join(SHARED_DIR, "output", "masks")    # from Server2
@@ -115,9 +115,10 @@ if user and pw:
 
 
 
-# RunPod configuration
-RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
-GPU_POD_ID = os.getenv("GPU_POD_ID", "")
+# AWS configuration
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+GPU_INSTANCE_ID = os.getenv("GPU_INSTANCE_ID", "")
+ec2_client = boto3.client("ec2", region_name=AWS_REGION)
 GPU_ACTIVE = False
 USER_LOGGED_IN = False
 _last_work_time = time.time()
@@ -166,47 +167,27 @@ ensure_models()
 # -------------------------
 # GPU lifecycle helpers
 # -------------------------
-def runpod_request(query: str, variables: dict) -> dict:
-    url = "https://api.runpod.io/graphql"
-    headers = {"Authorization": f"Bearer {RUNPOD_API_KEY}"}
-    try:
-        r = requests.post(url, headers=headers, json={"query": query, "variables": variables})
-        return r.json()
-    except Exception:
-        return {}
-
-
-def start_gpu_pod() -> None:
+def start_gpu_instance() -> None:
     global GPU_ACTIVE, _last_work_time
-    if GPU_ACTIVE or not RUNPOD_API_KEY or not GPU_POD_ID:
+    if GPU_ACTIVE or not GPU_INSTANCE_ID:
         return
-    query = """
-      mutation StartPod($podId: ID!) {
-        podStart(input: { podId: $podId }) {
-          id
-          desiredStatus
-        }
-      }
-    """
-    runpod_request(query, {"podId": GPU_POD_ID})
-    GPU_ACTIVE = True
-    _last_work_time = time.time()
+    try:
+        ec2_client.start_instances(InstanceIds=[GPU_INSTANCE_ID])
+        GPU_ACTIVE = True
+        _last_work_time = time.time()
+    except Exception as e:
+        print(f"Failed to start instance: {e}")
 
 
-def stop_gpu_pod() -> None:
+def stop_gpu_instance() -> None:
     global GPU_ACTIVE
-    if not GPU_ACTIVE or not RUNPOD_API_KEY or not GPU_POD_ID:
+    if not GPU_ACTIVE or not GPU_INSTANCE_ID:
         return
-    query = """
-      mutation StopPod($podId: ID!) {
-        podStop(input: { podId: $podId }) {
-          id
-          desiredStatus
-        }
-      }
-    """
-    runpod_request(query, {"podId": GPU_POD_ID})
-    GPU_ACTIVE = False
+    try:
+        ec2_client.stop_instances(InstanceIds=[GPU_INSTANCE_ID])
+        GPU_ACTIVE = False
+    except Exception as e:
+        print(f"Failed to stop instance: {e}")
 
 
 def has_unprocessed_files() -> bool:
@@ -232,14 +213,14 @@ def gpu_monitor_loop() -> None:
         pending = has_unprocessed_files()
         if USER_LOGGED_IN:
             if pending and not GPU_ACTIVE:
-                start_gpu_pod()
+                start_gpu_instance()
             if pending:
                 _last_work_time = time.time()
             elif GPU_ACTIVE and time.time() - _last_work_time > 300:
-                stop_gpu_pod()
+                stop_gpu_instance()
         else:
             if GPU_ACTIVE:
-                stop_gpu_pod()
+                stop_gpu_instance()
         time.sleep(30)
 
 
@@ -393,7 +374,7 @@ def login():
         password = request.form.get("password", "")
         if USERS.get(username) == password:
             session["user"] = username
-            start_gpu_pod()
+            start_gpu_instance()
             return redirect(url_for("index"))
         error = "Invalid credentials"
     return render_template("login.html", error=error)
@@ -404,7 +385,7 @@ def logout():
     session.pop("user", None)
     global USER_LOGGED_IN
     USER_LOGGED_IN = False
-    stop_gpu_pod()
+    stop_gpu_instance()
     return redirect(url_for("login"))
 
 # -------------------------

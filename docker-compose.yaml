@@ -9,10 +9,10 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./shared:/mnt/shared
+      - ./shared:/mnt/efs
     environment:
-      - RUNPOD_API_KEY=${RUNPOD_API_KEY}
-      - GPU_POD_ID=${GPU_POD_ID}
+      - AWS_REGION=${AWS_REGION}
+      - GPU_INSTANCE_ID=${GPU_INSTANCE_ID}
     depends_on: []
     
   server2:
@@ -26,4 +26,4 @@ services:
           devices:
             - capabilities: [gpu]
     volumes:
-      - ./shared:/mnt/shared
+      - ./shared:/mnt/efs
