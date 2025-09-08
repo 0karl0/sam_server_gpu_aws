@@ -81,7 +81,7 @@ def get_single_secret_value(secret_name):
         get_secret_value_response = client.get_secret_value(
             SecretId=secret_name
         )
-        return get_secret_value_response
+        return get_secret_value_response["SecretString"]
     except ClientError as e:
         print(e)
         # For a list of exceptions thrown, see
@@ -89,17 +89,17 @@ def get_single_secret_value(secret_name):
         raise e
     else:
         secret_string = get_secret_value_response['SecretString']
-        return json.loads(secret_string)
+        return json.loads(secret_string)["SecretString"]
 USERS: Dict[str, str] = {}
 
 
-secret = get_single_secret_value("APP_USER1")
+user = get_single_secret_value("APP_USER1")
 
-user = secret["SecretString"]
+#user = secret["SecretString"]
 
-secret = get_single_secret_value("APP_PASS1")
+pw = get_single_secret_value("APP_PASS1")
 
-pw = secret["SecretString"]
+#pw = secret["SecretString"]
 
 if user and pw:
         USERS[user] = pw
@@ -113,9 +113,14 @@ GPU_ACTIVE = False
 USER_LOGGED_IN = False
 _last_work_time = time.time()
 
-SAGEMAKER_ENDPOINT = os.getenv("SAGEMAKER_ENDPOINT","sam-server2-endpoint")
+SAGEMAKER_ENDPOINT = get_single_secret_value("SAGEMAKER_ENDPOINT") #os.getenv("SAGEMAKER_ENDPOINT","sam-server2-endpoint")
+
 SAGEMAKER_VARIANT = os.getenv("SAGEMAKER_VARIANT", "AllTraffic")
-S3_BUCKET = os.getenv("S3_BUCKET","sam-server-shared-1757294775")
+
+S3_BUCKET = get_single_secret_value("S3_BUCKET")
+
+
+#S3_BUCKET = os.getenv("S3_BUCKET","sam-server-shared-1757294775")
 s3_client = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
 sm_client = (
     boto3.client("sagemaker-runtime", region_name=AWS_REGION)
