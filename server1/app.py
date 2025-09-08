@@ -90,6 +90,8 @@ def get_single_secret_value(secret_name):
     else:
         secret_string = get_secret_value_response['SecretString']
         return json.loads(secret_string)
+USERS: Dict[str, str] = {}
+
 
 secret = get_single_secret_value("APP_USER1")
 
