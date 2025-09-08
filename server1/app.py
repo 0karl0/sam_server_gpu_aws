@@ -70,16 +70,6 @@ pillow_heif.register_heif_opener()
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "change-me")
 
-# Load up to two user credentials from environment variables
-# Expect pairs APP_USER1/APP_PASS1 and APP_USER2/APP_PASS2
-USERS: Dict[str, str] = {}
-#for i in (1,2):
-#    user = "karl" #os.getenv(f"APP_USER{i}")
-#    pw = "testing!" #os.getenv(f"APP_PASS{i}")
-#    print(f'u: {user}')
-#    if user and pw:
-#        USERS[user] = pw
-
 def get_single_secret_value(secret_name):
     session = boto3.session.Session()
     client = session.client(
@@ -121,9 +111,9 @@ GPU_ACTIVE = False
 USER_LOGGED_IN = False
 _last_work_time = time.time()
 
-SAGEMAKER_ENDPOINT = os.getenv("SAGEMAKER_ENDPOINT")
+SAGEMAKER_ENDPOINT = os.getenv("SAGEMAKER_ENDPOINT","sam-server2-endpoint")
 SAGEMAKER_VARIANT = os.getenv("SAGEMAKER_VARIANT", "AllTraffic")
-S3_BUCKET = os.getenv("S3_BUCKET")
+S3_BUCKET = os.getenv("S3_BUCKET","sam-server-shared-1757294775")
 s3_client = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
 sm_client = (
     boto3.client("sagemaker-runtime", region_name=AWS_REGION)
