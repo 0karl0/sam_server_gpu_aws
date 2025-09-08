@@ -9,7 +9,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./shared:/mnt/efs
+      - ./shared:/mnt/s3
     environment:
       - AWS_REGION=${AWS_REGION}
       - GPU_INSTANCE_ID=${GPU_INSTANCE_ID}
@@ -26,4 +26,4 @@ services:
           devices:
             - capabilities: [gpu]
     volumes:
-      - ./shared:/mnt/efs
+      - ./shared:/mnt/s3

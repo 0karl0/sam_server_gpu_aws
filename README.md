@@ -18,8 +18,8 @@ The web interface presents a login form and only proceeds once a valid
 username/password pair is supplied.
 
 Both servers read and write job data and model weights from a shared storage
-location. Mount an EFS volume into each container and ensure both processes
-point to the same path. The base directory defaults to `/mnt/efs` but can be
+location. Mount an S3 bucket into each container and ensure both processes
+point to the same path. The base directory defaults to `/mnt/s3` but can be
 overridden with the `SHARED_DIR` environment variable.
 
 When a user logs in, Server1 starts a dedicated GPU EC2 instance (e.g.,
@@ -29,7 +29,7 @@ appear.
 
 ```
 docker run -it --rm -p 5050:5050 \
-  -v /path/on/efs:/mnt/efs \
+  -v /path/on/s3:/mnt/s3 \
   -e AWS_REGION="us-east-1" \
   -e GPU_INSTANCE_ID="i-xxxxxxxx" \
   -e APP_USER1="user_a" -e APP_PASS1="pass_a" \
