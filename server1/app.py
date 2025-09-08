@@ -117,16 +117,24 @@ if user and pw:
 
 # AWS configuration
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-GPU_INSTANCE_ID = os.getenv("GPU_INSTANCE_ID", "")
-ec2_client = boto3.client("ec2", region_name=AWS_REGION)
 GPU_ACTIVE = False
 USER_LOGGED_IN = False
 _last_work_time = time.time()
 
 SAGEMAKER_ENDPOINT = os.getenv("SAGEMAKER_ENDPOINT")
+SAGEMAKER_VARIANT = os.getenv("SAGEMAKER_VARIANT", "AllTraffic")
 S3_BUCKET = os.getenv("S3_BUCKET")
 s3_client = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
-sm_client = boto3.client("sagemaker-runtime", region_name=AWS_REGION) if SAGEMAKER_ENDPOINT else None
+sm_client = (
+    boto3.client("sagemaker-runtime", region_name=AWS_REGION)
+    if SAGEMAKER_ENDPOINT
+    else None
+)
+sagemaker_client = (
+    boto3.client("sagemaker", region_name=AWS_REGION)
+    if SAGEMAKER_ENDPOINT
+    else None
+)
 
 # Track which mask files have been processed into crops
 _processed_mask_files = set()
@@ -170,29 +178,39 @@ ensure_models()
 
 
 # -------------------------
-# GPU lifecycle helpers
+# SageMaker endpoint lifecycle helpers
 # -------------------------
 def start_gpu_instance() -> None:
     global GPU_ACTIVE, _last_work_time
-    if GPU_ACTIVE or not GPU_INSTANCE_ID:
+    if GPU_ACTIVE or not (SAGEMAKER_ENDPOINT and sagemaker_client):
         return
     try:
-        ec2_client.start_instances(InstanceIds=[GPU_INSTANCE_ID])
+        sagemaker_client.update_endpoint_weights_and_capacities(
+            EndpointName=SAGEMAKER_ENDPOINT,
+            DesiredWeightsAndCapacities=[
+                {"VariantName": SAGEMAKER_VARIANT, "DesiredInstanceCount": 1}
+            ],
+        )
         GPU_ACTIVE = True
         _last_work_time = time.time()
     except Exception as e:
-        print(f"Failed to start instance: {e}")
+        print(f"Failed to scale endpoint: {e}")
 
 
 def stop_gpu_instance() -> None:
     global GPU_ACTIVE
-    if not GPU_ACTIVE or not GPU_INSTANCE_ID:
+    if not GPU_ACTIVE or not (SAGEMAKER_ENDPOINT and sagemaker_client):
         return
     try:
-        ec2_client.stop_instances(InstanceIds=[GPU_INSTANCE_ID])
+        sagemaker_client.update_endpoint_weights_and_capacities(
+            EndpointName=SAGEMAKER_ENDPOINT,
+            DesiredWeightsAndCapacities=[
+                {"VariantName": SAGEMAKER_VARIANT, "DesiredInstanceCount": 0}
+            ],
+        )
         GPU_ACTIVE = False
     except Exception as e:
-        print(f"Failed to stop instance: {e}")
+        print(f"Failed to scale endpoint: {e}")
 
 
 def has_unprocessed_files() -> bool:

@@ -22,25 +22,26 @@ location. Mount an S3 bucket into each container and ensure both processes
 point to the same path. The base directory defaults to `/mnt/s3` but can be
 overridden with the `SHARED_DIR` environment variable.
 
-When a user logs in, Server1 starts a dedicated GPU EC2 instance (e.g.,
-`g4dn.xlarge`) via the AWS API. Server1 monitors the queue and stops the
-instance five minutes after no images remain, restarting it when new files
+When a user logs in, Server1 scales a SageMaker endpoint variant up to one
+instance via the AWS API. Server1 monitors the queue and scales the endpoint
+back to zero five minutes after no images remain, restarting it when new files
 appear.
 
 ```
 docker run -it --rm -p 5050:5050 \
   -v /path/on/s3:/mnt/s3 \
   -e AWS_REGION="us-east-1" \
-  -e GPU_INSTANCE_ID="i-xxxxxxxx" \
+  -e S3_BUCKET="your-bucket" \
+  -e SAGEMAKER_ENDPOINT="sam-server2-endpoint" \
   -e APP_USER1="user_a" -e APP_PASS1="pass_a" \
   -e APP_USER2="user_b" -e APP_PASS2="pass_b" \
   sam-server1
 ```
 
-Server2 runs on the GPU EC2 instance. The container polls the shared storage for
+Server2 runs as a SageMaker endpoint. The container polls the shared storage for
 new images and processes them as they appear. Heavy models
 (`segment-anything`, `ultralytics`, `rembg[gpu]`) are imported at module load
-time so they remain in memory while the instance is running.
+time so they remain in memory while the endpoint is active.
 
 ### Environment Variables
 
