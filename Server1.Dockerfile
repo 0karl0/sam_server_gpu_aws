@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy app code
 COPY server1/ .
 
-# Flask runs on port 5000
-EXPOSE 5050
+# Flask runs on port 8080
+EXPOSE 8080
 
 CMD ["python", "app.py"]
