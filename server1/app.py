@@ -28,10 +28,10 @@ import pillow_heif  # enables HEIC/HEIF decode in Pillow
 # -------------------------
 # Paths / Constants
 # -------------------------
-# Base directory for shared storage. Defaults to "/mnt/efs" but can be
+# Base directory for shared storage. Defaults to "/mnt/s3" but can be
 # overridden via the SHARED_DIR environment variable so both servers can point
-# to a common network location (e.g., an EFS mount).
-SHARED_DIR   = os.getenv("SHARED_DIR", "/mnt/efs")
+# to a common network location (e.g., an S3 mount).
+SHARED_DIR   = os.getenv("SHARED_DIR", "/mnt/s3")
 INPUT_DIR    = os.path.join(SHARED_DIR, "input")              # originals (PNG-normalized)
 RESIZED_DIR  = os.path.join(SHARED_DIR, "resized")            # ≤1024 for SAM
 MASKS_DIR    = os.path.join(SHARED_DIR, "output", "masks")    # from Server2

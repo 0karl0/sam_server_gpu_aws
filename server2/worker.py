@@ -41,9 +41,9 @@ except Exception:  # pragma: no cover - torch may not be installed
 # Config / directories
 # -------------------------
 # Base directory for shared storage, overridable via SHARED_DIR env var to
-# point at a network-mounted location (e.g., EFS) accessible from both
+# point at a network-mounted location (e.g., S3) accessible from both
 # Server1 and this GPU worker.
-SHARED_DIR = os.getenv("SHARED_DIR", "/mnt/efs")
+SHARED_DIR = os.getenv("SHARED_DIR", "/mnt/s3")
 RESIZED_DIR = os.path.join(SHARED_DIR, "resized")
 MASKS_DIR = os.path.join(SHARED_DIR, "output", "masks")
 SMALLS_DIR = os.path.join(SHARED_DIR, "output", "smalls")
