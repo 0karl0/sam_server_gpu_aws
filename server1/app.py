@@ -114,13 +114,13 @@ USER_LOGGED_IN = False
 _last_work_time = time.time()
 
 print("getting sage")
-secret = get_single_secret_value("SAGEMAKER_ENDPOINT") #os.getenv("SAGEMAKER_ENDPOINT","sam-server2-endpoint")
+secret = get_single_secret_value("sagemaker-endpoint") #os.getenv("SAGEMAKER_ENDPOINT","sam-server2-endpoint")
 
 SAGEMAKER_ENDPOINT =secret["SecretString"]
 
 SAGEMAKER_VARIANT = os.getenv("SAGEMAKER_VARIANT", "AllTraffic")
 print("getting s3")
-secret = get_single_secret_value("S3_BUCKET")
+secret = get_single_secret_value("s3bucket")
 S3_BUCKET = secret["SecretString"]
 print(S3_BUCKET)
 
