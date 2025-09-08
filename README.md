@@ -42,6 +42,21 @@ new images and processes them as they appear. Heavy models
 (`segment-anything`, `ultralytics`, `rembg[gpu]`) are imported at module load
 time so they remain in memory while the instance is running.
 
+### Environment Variables
+
+Both Server1 and the SageMaker container require AWS credentials and region
+configuration to interact with services such as S3, EC2, and Secrets Manager.
+Provide these via one of the standard AWS mechanisms (environment variables,
+credentials files, or IAM roles). When using environment variables, set:
+
+* `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (and `AWS_SESSION_TOKEN` if using
+  temporary credentials)
+* `AWS_REGION` or `AWS_DEFAULT_REGION`
+
+If your network uses a proxy, also configure `HTTPS_PROXY`/`HTTP_PROXY` so
+`botocore` can reach AWS endpoints. The `SHARED_DIR` variable may be set to change
+the mount point for the shared S3 directory.
+
 ### Models
 
 When Server1 starts it ensures required model weights are present under

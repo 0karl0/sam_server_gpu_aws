@@ -419,15 +419,14 @@ def process_new_images() -> int:
     processed = load_processed_set()
     settings = load_settings()
     files = [f for f in os.listdir(RESIZED_DIR) if f.endswith((".png", ".jpg", ".jpeg"))]
-    if not files:
-        print("[Worker] No pages found")
+    new_files = [f for f in files if os.path.splitext(f)[0] not in processed]
+    if not new_files:
+        print("[Worker] No new files found on S3")
         return 0
-    print(f"[Worker] Found {len(files)} page(s): {files}")
+    print(f"[Worker] Found {len(new_files)} new file(s) on S3: {new_files}")
     count = 0
-    for f in files:
+    for f in new_files:
         base = os.path.splitext(f)[0]
-        if base in processed:
-            continue
         file_path = os.path.join(RESIZED_DIR, f)
         start = time.process_time()
         print(f"[Worker] Processing {f} ...")
