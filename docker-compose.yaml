@@ -7,7 +7,7 @@ services:
       dockerfile: Server1.Dockerfile
     container_name: server1
     ports:
-      - "5000:5000"
+      - "8080:8080"
     volumes:
       - ./shared:/mnt/s3
     environment:
