@@ -123,6 +123,11 @@ GPU_ACTIVE = False
 USER_LOGGED_IN = False
 _last_work_time = time.time()
 
+SAGEMAKER_ENDPOINT = os.getenv("SAGEMAKER_ENDPOINT")
+S3_BUCKET = os.getenv("S3_BUCKET")
+s3_client = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
+sm_client = boto3.client("sagemaker-runtime", region_name=AWS_REGION) if SAGEMAKER_ENDPOINT else None
+
 # Track which mask files have been processed into crops
 _processed_mask_files = set()
 
@@ -362,6 +367,58 @@ def make_rgba_crops(original_bgr: np.ndarray, mask_gray: np.ndarray) -> List[np.
 
     return crops
 
+
+# -------------------------
+# Server2 (SageMaker) invocation
+# -------------------------
+def _mark_processed(stem: str) -> None:
+    processed = set()
+    if os.path.exists(PROCESSED_FILE):
+        try:
+            with open(PROCESSED_FILE, "r") as f:
+                processed.update(json.load(f))
+        except Exception:
+            pass
+    processed.add(stem)
+    tmp = PROCESSED_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(sorted(processed), f)
+    os.replace(tmp, PROCESSED_FILE)
+
+
+def run_sagemaker_job(stem: str) -> None:
+    if not (SAGEMAKER_ENDPOINT and S3_BUCKET and s3_client and sm_client):
+        return
+    resized_path = os.path.join(RESIZED_DIR, f"{stem}.png")
+    if not os.path.exists(resized_path):
+        return
+    input_key = f"input/{stem}.png"
+    output_key = f"output/{stem}_mask0.png"
+    try:
+        s3_client.upload_file(resized_path, S3_BUCKET, input_key)
+    except Exception as e:
+        print(f"[sagemaker] upload failed: {e}")
+        return
+    payload = {"s3": f"s3://{S3_BUCKET}/{input_key}", "output": f"s3://{S3_BUCKET}/{output_key}"}
+    try:
+        sm_client.invoke_endpoint(
+            EndpointName=SAGEMAKER_ENDPOINT,
+            ContentType="application/json",
+            Body=json.dumps(payload),
+        )
+    except Exception as e:
+        print(f"[sagemaker] invoke failed: {e}")
+        return
+    local_mask = os.path.join(MASKS_DIR, f"{stem}_mask0.png")
+    try:
+        s3_client.download_file(S3_BUCKET, output_key, local_mask)
+    except Exception as e:
+        print(f"[sagemaker] download failed: {e}")
+        return
+    process_mask_file(local_mask)
+    _processed_mask_files.add(local_mask)
+    _mark_processed(stem)
+
 # -------------------------
 # Authentication
 # -------------------------
@@ -442,6 +499,9 @@ def upload():
     # Save a smaller thumbnail for quick listing in /thumbs
     thumb_png = os.path.join(THUMBS_DIR, f"{stem}.png")
     normalize_to_png_and_save(pil_img, thumb_png, longest_side=256)
+
+    if SAGEMAKER_ENDPOINT and S3_BUCKET:
+        threading.Thread(target=run_sagemaker_job, args=(stem,), daemon=True).start()
 
     return jsonify({"status": "ok", "original": f"{stem}.png"})
 
