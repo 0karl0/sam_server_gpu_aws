@@ -32,38 +32,54 @@ import pillow_heif  # enables HEIC/HEIF decode in Pillow
 # overridden via the SHARED_DIR environment variable so both servers can point
 # to a common network location (e.g., an S3 mount).
 SHARED_DIR   = os.getenv("SHARED_DIR", "/mnt/s3")
-INPUT_DIR    = os.path.join(SHARED_DIR, "input")              # originals (PNG-normalized)
-RESIZED_DIR  = os.path.join(SHARED_DIR, "resized")            # ≤1024 for SAM
-MASKS_DIR    = os.path.join(SHARED_DIR, "output", "masks")    # from Server2
-CROPS_DIR    = os.path.join(SHARED_DIR, "output", "crops")    # RGBA crops
-SMALLS_DIR   = os.path.join(SHARED_DIR, "output", "smalls")
-POINTS_DIR   = os.path.join(SHARED_DIR, "output", "points")
-PROCESSED_FILE = os.path.join(SHARED_DIR, "output", "processed.json")
-CONFIG_DIR   = os.path.join(SHARED_DIR, "config")
+
+# Paths that depend on the logged-in user. They are initialized for a generic
+# "shared" user but are reconfigured for each user in ``set_user_dirs``.
+USER_BASE    = os.path.join(SHARED_DIR, "shared")
+INPUT_DIR    = os.path.join(USER_BASE, "input")              # originals (PNG-normalized)
+RESIZED_DIR  = os.path.join(USER_BASE, "resized")            # ≤1024 for SAM
+MASKS_DIR    = os.path.join(USER_BASE, "output", "masks")    # from Server2
+CROPS_DIR    = os.path.join(USER_BASE, "output", "crops")    # RGBA crops
+SMALLS_DIR   = os.path.join(USER_BASE, "output", "smalls")
+POINTS_DIR   = os.path.join(USER_BASE, "output", "points")
+PROCESSED_FILE = os.path.join(USER_BASE, "output", "processed.json")
+CONFIG_DIR   = os.path.join(USER_BASE, "config")
 SETTINGS_JSON = os.path.join(CONFIG_DIR, "settings.json")
 CROPS_INDEX   = os.path.join(CROPS_DIR, "index.json")         # manifest linking crops to original
-THUMBS_DIR   = os.path.join(SHARED_DIR, "output", "thumbs")   # thumbnails for UI
+THUMBS_DIR   = os.path.join(USER_BASE, "output", "thumbs")   # thumbnails for UI
 MODELS_DIR   = os.path.join(SHARED_DIR, "models")              # downloaded weights
 
 MAX_RESIZE = 1024  # longest side for SAM
 ALLOWED_EXT = {"png", "jpg", "jpeg", "webp", "bmp", "tiff", "heic", "heif"}
 
-for d in [
-    INPUT_DIR,
-    RESIZED_DIR,
-    MASKS_DIR,
-    CROPS_DIR,
-    SMALLS_DIR,
-    THUMBS_DIR,
-    CONFIG_DIR,
-    POINTS_DIR,
-    MODELS_DIR,
-]:
-    try:
-     print(f'making directory {d}')
-     os.makedirs(d, exist_ok=True)
-    except:
-     print(f'could not make {d}')
+# Only the models directory is truly shared across users and can be created at
+# import time. User-specific directories are created on demand in
+# ``set_user_dirs``.
+os.makedirs(MODELS_DIR, exist_ok=True)
+
+# Helper to configure per-user directory paths. This updates module-level
+# variables so existing code can continue to reference them.
+def set_user_dirs(username: str) -> None:
+    global INPUT_DIR, RESIZED_DIR, MASKS_DIR, CROPS_DIR, SMALLS_DIR
+    global THUMBS_DIR, CONFIG_DIR, POINTS_DIR, PROCESSED_FILE
+    global SETTINGS_JSON, CROPS_INDEX
+
+    base = os.path.join(SHARED_DIR, username)
+    INPUT_DIR = os.path.join(base, "input")
+    RESIZED_DIR = os.path.join(base, "resized")
+    MASKS_DIR = os.path.join(base, "output", "masks")
+    CROPS_DIR = os.path.join(base, "output", "crops")
+    SMALLS_DIR = os.path.join(base, "output", "smalls")
+    THUMBS_DIR = os.path.join(base, "output", "thumbs")
+    POINTS_DIR = os.path.join(base, "output", "points")
+    CONFIG_DIR = os.path.join(base, "config")
+    PROCESSED_FILE = os.path.join(base, "output", "processed.json")
+    SETTINGS_JSON = os.path.join(CONFIG_DIR, "settings.json")
+    CROPS_INDEX = os.path.join(CROPS_DIR, "index.json")
+
+    for d in [INPUT_DIR, RESIZED_DIR, MASKS_DIR, CROPS_DIR, SMALLS_DIR,
+              THUMBS_DIR, CONFIG_DIR, POINTS_DIR]:
+        os.makedirs(d, exist_ok=True)
 # Register HEIF opener for Pillow
 pillow_heif.register_heif_opener()
 
@@ -126,6 +142,13 @@ print(S3_BUCKET)
 
 #S3_BUCKET = os.getenv("S3_BUCKET","sam-server-shared-1757294775")
 s3_client = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
+if s3_client:
+    try:
+        s3_client.head_bucket(Bucket=S3_BUCKET)
+        print(f"[s3] bucket '{S3_BUCKET}' accessible")
+    except Exception as e:
+        print(f"[s3] bucket '{S3_BUCKET}' not accessible: {e}")
+        s3_client = None
 sm_client = (
     boto3.client("sagemaker-runtime", region_name=AWS_REGION)
     if SAGEMAKER_ENDPOINT
@@ -215,19 +238,25 @@ def stop_gpu_instance() -> None:
 
 
 def has_unprocessed_files() -> bool:
-    files = [f for f in os.listdir(RESIZED_DIR) if f.lower().endswith(".png")]
-    if not files:
-        return False
-    processed = set()
-    if os.path.exists(PROCESSED_FILE):
-        try:
-            with open(PROCESSED_FILE, "r") as f:
-                processed = set(json.load(f))
-        except Exception:
-            pass
-    for f in files:
-        if os.path.splitext(f)[0] not in processed:
-            return True
+    """Check all user directories for any resized images not yet processed."""
+    for user in os.listdir(SHARED_DIR):
+        resized_dir = os.path.join(SHARED_DIR, user, "resized")
+        if not os.path.isdir(resized_dir):
+            continue
+        files = [f for f in os.listdir(resized_dir) if f.lower().endswith(".png")]
+        if not files:
+            continue
+        processed_file = os.path.join(SHARED_DIR, user, "output", "processed.json")
+        processed = set()
+        if os.path.exists(processed_file):
+            try:
+                with open(processed_file, "r") as f:
+                    processed = set(json.load(f))
+            except Exception:
+                pass
+        for f in files:
+            if os.path.splitext(f)[0] not in processed:
+                return True
     return False
 
 
@@ -255,6 +284,8 @@ def require_login():
         return
     if "user" not in session:
         return redirect(url_for("login"))
+    set_user_dirs(session["user"])
+    ensure_settings_defaults()
     USER_LOGGED_IN = True
     _last_work_time = time.time()
 
@@ -405,32 +436,40 @@ def _mark_processed(stem: str) -> None:
     os.replace(tmp, PROCESSED_FILE)
 
 
-def run_sagemaker_job(stem: str) -> None:
+def run_sagemaker_job(stem: str, username: str) -> None:
     if not (SAGEMAKER_ENDPOINT and S3_BUCKET and s3_client and sm_client):
         return
+    set_user_dirs(username)
     resized_path = os.path.join(RESIZED_DIR, f"{stem}.png")
     if not os.path.exists(resized_path):
         return
-    input_key = f"input/{stem}.png"
-    output_key = f"output/{stem}_mask0.png"
+    input_key = f"{username}/input/{stem}.png"
+    output_key = f"{username}/output/{stem}_mask0.png"
     try:
         s3_client.upload_file(resized_path, S3_BUCKET, input_key)
+        print(f"[sagemaker] uploaded {resized_path} to s3://{S3_BUCKET}/{input_key}")
     except Exception as e:
         print(f"[sagemaker] upload failed: {e}")
         return
     payload = {"s3": f"s3://{S3_BUCKET}/{input_key}", "output": f"s3://{S3_BUCKET}/{output_key}"}
     try:
-        sm_client.invoke_endpoint(
+        response = sm_client.invoke_endpoint(
             EndpointName=SAGEMAKER_ENDPOINT,
             ContentType="application/json",
             Body=json.dumps(payload),
         )
+        status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if status != 200:
+            body = response.get("Body")
+            body_text = body.read().decode() if body else ""
+            print(f"[sagemaker] invoke returned {status}: {body_text}")
     except Exception as e:
         print(f"[sagemaker] invoke failed: {e}")
         return
     local_mask = os.path.join(MASKS_DIR, f"{stem}_mask0.png")
     try:
         s3_client.download_file(S3_BUCKET, output_key, local_mask)
+        print(f"[sagemaker] downloaded s3://{S3_BUCKET}/{output_key} to {local_mask}")
     except Exception as e:
         print(f"[sagemaker] download failed: {e}")
         return
@@ -450,6 +489,8 @@ def login():
         password = request.form.get("password", "")
         if USERS.get(username) == password:
             session["user"] = username
+            set_user_dirs(username)
+            ensure_settings_defaults()
             start_gpu_instance()
             return redirect(url_for("index"))
         error = "Invalid credentials"
@@ -520,7 +561,11 @@ def upload():
     normalize_to_png_and_save(pil_img, thumb_png, longest_side=256)
 
     if SAGEMAKER_ENDPOINT and S3_BUCKET:
-        threading.Thread(target=run_sagemaker_job, args=(stem,), daemon=True).start()
+        threading.Thread(
+            target=run_sagemaker_job,
+            args=(stem, session.get("user", "shared")),
+            daemon=True,
+        ).start()
 
     return jsonify({"status": "ok", "original": f"{stem}.png"})
 
@@ -729,14 +774,19 @@ def process_mask_file(mask_path: str):
 def mask_watcher_loop():
     while True:
         try:
-            for fname in os.listdir(MASKS_DIR):
-                if not fname.lower().endswith(".png"):
+            for user in os.listdir(SHARED_DIR):
+                mask_dir = os.path.join(SHARED_DIR, user, "output", "masks")
+                if not os.path.isdir(mask_dir):
                     continue
-                fpath = os.path.join(MASKS_DIR, fname)
-                if fpath in _processed_mask_files:
-                    continue
-                process_mask_file(fpath)
-                _processed_mask_files.add(fpath)
+                for fname in os.listdir(mask_dir):
+                    if not fname.lower().endswith(".png"):
+                        continue
+                    fpath = os.path.join(mask_dir, fname)
+                    if fpath in _processed_mask_files:
+                        continue
+                    set_user_dirs(user)
+                    process_mask_file(fpath)
+                    _processed_mask_files.add(fpath)
         except Exception as e:
             # Keep the watcher alive even if one file causes an error
             print(f"[mask_watcher] error: {e}")
