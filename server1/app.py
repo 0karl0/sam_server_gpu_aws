@@ -105,7 +105,7 @@ if user and pw:
         USERS[user] = pw
 
 
-print(user)
+print(f'user: {user}')
 
 # AWS configuration
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
@@ -120,8 +120,9 @@ SAGEMAKER_ENDPOINT =secret["SecretString"]
 
 SAGEMAKER_VARIANT = os.getenv("SAGEMAKER_VARIANT", "AllTraffic")
 print("getting s3")
-S3_BUCKET = get_single_secret_value("S3_BUCKET")
-
+secret = get_single_secret_value("S3_BUCKET")
+S3_BUCKET = secret["SecretString"]
+print(S3_BUCKET)
 
 #S3_BUCKET = os.getenv("S3_BUCKET","sam-server-shared-1757294775")
 s3_client = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
