@@ -307,7 +307,12 @@ def require_login():
 # Helpers
 # -------------------------
 def normalize_to_png_and_save(pil_img: Image.Image, out_path_png: str, longest_side: int | None = None) -> None:
-    """Optionally resize to longest_side, then save as PNG (preserve alpha if present)."""
+    """Optionally resize to longest_side, then save as PNG (preserve alpha if present).
+
+    Ensures the parent directory for ``out_path_png`` exists so uploads do not
+    fail when per-user folders haven't been created yet.
+    """
+    os.makedirs(os.path.dirname(out_path_png), exist_ok=True)
     img = pil_img.convert("RGBA")
     if longest_side and max(img.size) > longest_side:
         img.thumbnail((longest_side, longest_side), Image.LANCZOS)
@@ -542,6 +547,11 @@ def upload():
     filename = secure_filename(file.filename)
     stem, ext = os.path.splitext(filename)
     ext = ext.lower().lstrip(".")
+
+    # Ensure user-specific directories exist even if the request bypassed the
+    # normal login flow.
+    username = session.get("user", "shared")
+    set_user_dirs(username)
 
     if ext not in ALLOWED_EXT:
         return "Unsupported file type", 400
