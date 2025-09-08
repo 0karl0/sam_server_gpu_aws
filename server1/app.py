@@ -137,8 +137,21 @@ SAGEMAKER_ENDPOINT =secret["SecretString"]
 SAGEMAKER_VARIANT = os.getenv("SAGEMAKER_VARIANT", "AllTraffic")
 print("getting s3")
 secret = get_single_secret_value("s3bucket")
-S3_BUCKET = secret["SecretString"]
-print(S3_BUCKET)
+#S3_BUCKET = secret["SecretString"]
+
+secret_str = secret["SecretString"]
+# SecretString may be a JSON blob like {"S3_BUCKET": "arn:aws:s3:::my-bucket"}
+# so try to decode it; fallback to the raw string if decoding fails.
+try:
+    secret_dict = json.loads(secret_str)
+    S3_BUCKET = secret_dict.get("S3_BUCKET", secret_str)
+except json.JSONDecodeError:
+    S3_BUCKET = secret_str
+# If the bucket is provided as an ARN, extract the bucket name portion.
+if S3_BUCKET.startswith("arn:aws:s3:::"):
+    S3_BUCKET = S3_BUCKET.split(":::", 1)[1]
+
+print(f'here is the s3 bucket were trying to load: {S3_BUCKET}')
 
 #S3_BUCKET = os.getenv("S3_BUCKET","sam-server-shared-1757294775")
 s3_client = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
