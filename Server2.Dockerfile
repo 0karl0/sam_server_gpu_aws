@@ -13,9 +13,13 @@ RUN pip3 install --no-cache-dir torch==2.3.1+cu121 torchvision==0.18.1+cu121 \
 COPY server2/requirements.txt /tmp/
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
 
+# Serve entrypoint for SageMaker
+COPY server2/serve /usr/local/bin/serve
+RUN chmod +x /usr/local/bin/serve
+
 # Application code
 WORKDIR /opt/program
 COPY server2/app.py .
 COPY server2/worker.py .
 
-CMD ["gunicorn", "--workers", "1", "--timeout", "3600", "--bind", "0.0.0.0:8080", "app:app"]
+CMD ["serve"]
