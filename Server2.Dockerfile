@@ -6,8 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip ca-certificates libglib2.0-0 git \
- && rm -rf /var/lib/apt/lists/*
+    python3 python3-pip ca-certificates libglib2.0-0 libgl1 git \
+    && rm -rf /var/lib/apt/lists/*
 
 # Make sure pip is new enough to handle PyTorch indexes
 RUN python3 -m pip install --upgrade pip setuptools wheel
