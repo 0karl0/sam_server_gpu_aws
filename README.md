@@ -60,9 +60,12 @@ the mount point for the shared S3 directory.
 
 ### Models
 
-When Server1 starts it ensures required model weights are present under
-`shared/models`, downloading any missing files without overwriting existing
-ones. The following weights are fetched:
+When Server2 starts it ensures required model weights are present under
+`shared/models`. If the `S3_BUCKET` environment variable is set it first looks
+for the weights in `s3://<bucket>/models/` and falls back to the public HTTP
+URLs only when the objects are missing. Newly fetched files are uploaded to the
+bucket so later instances can reuse them even if the upstream links are
+unavailable. The following weights are fetched:
 
 * `vit_l.pth` – Segment Anything
 * `birefnet-dis.onnx` – rembg

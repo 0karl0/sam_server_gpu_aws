@@ -6,8 +6,9 @@ import gc
 import subprocess
 import boto3
 import numpy as np
+import requests
 from typing import Dict
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, NoCredentialsError
 from PIL import Image
 from rembg import remove, new_session
 from segment_anything import (
@@ -42,6 +43,7 @@ except Exception:  # pragma: no cover - torch may not be installed
     DEVICE = "cpu"
 
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+S3_BUCKET = None  # populated by _mount_s3_from_secret
 
 
 def get_single_secret_value(secret_name: str) -> dict:
@@ -93,6 +95,70 @@ MODELS_DIR = os.path.join(SHARED_DIR, "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 MODEL_PATH = os.path.join(MODELS_DIR, "vit_l.pth")
 YOLO_MODELS_DIR = MODELS_DIR
+
+
+def _download_from_http(url: str, dest: str) -> bool:
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    tmp = dest + ".tmp"
+    try:
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        os.replace(tmp, dest)
+        return True
+    except Exception as e:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        print(f"[models] failed to download {url}: {e}")
+        return False
+
+
+def _download_from_s3(key: str, dest: str) -> bool:
+    if not S3_BUCKET:
+        return False
+    try:
+        boto3.client("s3").download_file(S3_BUCKET, key, dest)
+        return True
+    except (ClientError, NoCredentialsError) as e:
+        print(f"[models] s3 download failed for {key}: {e}")
+        if os.path.exists(dest):
+            os.remove(dest)
+        return False
+
+
+def _upload_to_s3(src: str, key: str) -> None:
+    if not S3_BUCKET:
+        return
+    try:
+        boto3.client("s3").upload_file(src, S3_BUCKET, key)
+    except (ClientError, NoCredentialsError) as e:
+        print(f"[models] s3 upload failed for {key}: {e}")
+
+
+def ensure_models() -> None:
+    models = {
+        "vit_l.pth": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
+        "birefnet-dis.onnx": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-DIS-epoch_590.onnx",
+        "yolov8n.pt": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt",
+        "yolov8n-seg.pt": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n-seg.pt",
+    }
+    for fname, url in models.items():
+        dest = os.path.join(MODELS_DIR, fname)
+        if os.path.exists(dest):
+            print(f"[models] {dest} already exists; skipping")
+            continue
+        key = f"models/{fname}"
+        if _download_from_s3(key, dest):
+            continue
+        if _download_from_http(url, dest):
+            _upload_to_s3(dest, key)
+        else:
+            print(f"[models] unable to obtain {fname}")
+
+
+ensure_models()
 
 
 def get_user_dirs(username: str) -> Dict[str, str]:

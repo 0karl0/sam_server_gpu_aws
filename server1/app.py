@@ -18,7 +18,6 @@ from flask import (
     session,
 )
 from werkzeug.utils import secure_filename
-import requests
 
 import numpy as np
 import cv2
@@ -195,50 +194,6 @@ sagemaker_client = (
 
 # Track which mask files have been processed into crops
 _processed_mask_files = set()
-
-
-# -------------------------
-# Model downloads
-# -------------------------
-def _download_file(url: str, dest: str) -> None:
-    if os.path.exists(dest):
-        print("file already exists!")
-        return
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    tmp = dest + ".tmp"
-    try:
-        with requests.get(url, stream=True) as r:
-            r.raise_for_status()
-            with open(tmp, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        os.replace(tmp, dest)
-    except Exception:
-        print(f'does {tmp} exist?')
-        if os.path.exists(tmp):
-            os.remove(tmp)
-
-
-# Model downloads are enabled by default. Set ENABLE_MODEL_DOWNLOADS=0 to skip
-# fetching large files at startup.
-ENABLE_MODEL_DOWNLOADS = os.getenv("ENABLE_MODEL_DOWNLOADS", "1") != "0"
-
-def ensure_models() -> None:
-    models = {
-        "vit_l.pth": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-        "birefnet-dis.onnx": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-DIS-epoch_590.onnx",
-        "yolov8n.pt": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt",
-        "yolov8n-seg.pt": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n-seg.pt",
-    }
-    for fname, url in models.items():
-        print(f'Downloading {fname}')
-        _download_file(url, os.path.join(MODELS_DIR, fname))
-
-
-if ENABLE_MODEL_DOWNLOADS:
-    ensure_models()
-else:
-    print("Model downloads disabled; skipping ensure_models()")
 
 
 # -------------------------
