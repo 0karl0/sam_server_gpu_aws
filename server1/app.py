@@ -497,7 +497,7 @@ def run_sagemaker_job(stem: str, username: str) -> None:
     resized_path = os.path.join(RESIZED_DIR, f"{stem}.png")
     if not os.path.exists(resized_path):
         return
-    input_key = f"{username}/input/{stem}.png"
+    input_key = f"{username}/resized/{stem}.png"
     output_key = f"{username}/output/{stem}_mask0.png"
     try:
         s3_client.upload_file(resized_path, S3_BUCKET, input_key)
@@ -610,6 +610,13 @@ def upload():
     # Normalize original to PNG in /input (use cropped if available)
     input_png = os.path.join(INPUT_DIR, f"{stem}.png")
     normalize_to_png_and_save(pil_img, input_png, longest_side=None)  # keep original resolution
+    if s3_client and S3_BUCKET:
+        try:
+            s3_key = f"{username}/input/{stem}.png"
+            s3_client.upload_file(input_png, S3_BUCKET, s3_key)
+            print(f"[upload] uploaded original to s3://{S3_BUCKET}/{s3_key}")
+        except Exception as e:
+            print(f"[upload] failed to upload original: {e}")
 
     # Also save a resized (≤1024) copy for SAM in /resized (same basename)
     resized_png = os.path.join(RESIZED_DIR, f"{stem}.png")
