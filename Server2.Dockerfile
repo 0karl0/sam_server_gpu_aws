@@ -2,7 +2,7 @@ FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip libglib2.0-0 libgl1 libsm6 libxext6 libxrender1 git \
+    python3 python3-pip libglib2.0-0 git \
     && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies (torch compiled for CUDA 12.1)
