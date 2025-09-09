@@ -1,0 +1,23 @@
+# Assuming you have an updated image in ECR
+new_image_uri = "your_ecr_repo/your_image:new_version"
+
+# Create a new SageMaker Model
+from sagemaker.model import Model
+sagemaker_session = sagemaker.Session()
+model = Model(
+    image_uri=new_image_uri,
+    role="arn:aws:iam::123456789012:role/SageMakerRole", # Replace with your SageMaker execution role
+    sagemaker_session=sagemaker_session
+)
+
+# Create a new Endpoint Configuration
+endpoint_config_name = "your-endpoint-config-new"
+model.create_model() # Ensure the model is created before creating endpoint config
+model.create_endpoint_config(name=endpoint_config_name)
+
+# Update the existing Endpoint
+endpoint_name = "your-existing-endpoint-name"
+sagemaker_session.update_endpoint(
+    endpoint_name=endpoint_name,
+    endpoint_config_name=endpoint_config_name
+)
