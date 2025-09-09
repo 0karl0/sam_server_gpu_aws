@@ -36,6 +36,7 @@ SHARED_DIR   = os.getenv("SHARED_DIR", "/mnt/s3")
 # Paths that depend on the logged-in user. They are initialized for a generic
 # "shared" user but are reconfigured for each user in ``set_user_dirs``.
 USER_BASE    = os.path.join(SHARED_DIR, "shared")
+UPLOADS_DIR  = os.path.join(USER_BASE, "uploads")             # raw uploaded files
 INPUT_DIR    = os.path.join(USER_BASE, "input")              # originals (PNG-normalized)
 RESIZED_DIR  = os.path.join(USER_BASE, "resized")            # ≤1024 for SAM
 MASKS_DIR    = os.path.join(USER_BASE, "output", "masks")    # from Server2
@@ -60,11 +61,12 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 # Helper to configure per-user directory paths. This updates module-level
 # variables so existing code can continue to reference them.
 def set_user_dirs(username: str) -> None:
-    global INPUT_DIR, RESIZED_DIR, MASKS_DIR, CROPS_DIR, SMALLS_DIR
+    global UPLOADS_DIR, INPUT_DIR, RESIZED_DIR, MASKS_DIR, CROPS_DIR, SMALLS_DIR
     global THUMBS_DIR, CONFIG_DIR, POINTS_DIR, PROCESSED_FILE
     global SETTINGS_JSON, CROPS_INDEX
 
     base = os.path.join(SHARED_DIR, username)
+    UPLOADS_DIR = os.path.join(base, "uploads")
     INPUT_DIR = os.path.join(base, "input")
     RESIZED_DIR = os.path.join(base, "resized")
     MASKS_DIR = os.path.join(base, "output", "masks")
@@ -77,9 +79,27 @@ def set_user_dirs(username: str) -> None:
     SETTINGS_JSON = os.path.join(CONFIG_DIR, "settings.json")
     CROPS_INDEX = os.path.join(CROPS_DIR, "index.json")
 
-    for d in [INPUT_DIR, RESIZED_DIR, MASKS_DIR, CROPS_DIR, SMALLS_DIR,
-              THUMBS_DIR, CONFIG_DIR, POINTS_DIR]:
+    for d in [UPLOADS_DIR, INPUT_DIR, RESIZED_DIR, MASKS_DIR, CROPS_DIR,
+              SMALLS_DIR, THUMBS_DIR, CONFIG_DIR, POINTS_DIR]:
         os.makedirs(d, exist_ok=True)
+
+    if s3_client and S3_BUCKET:
+        prefixes = [
+            f"{username}/uploads/",
+            f"{username}/input/",
+            f"{username}/resized/",
+            f"{username}/output/masks/",
+            f"{username}/output/thumbs/",
+            f"{username}/output/crops/",
+            f"{username}/output/smalls/",
+            f"{username}/output/points/",
+            f"{username}/config/",
+        ]
+        for p in prefixes:
+            try:
+                s3_client.put_object(Bucket=S3_BUCKET, Key=p)
+            except Exception as e:  # pragma: no cover - best effort
+                print(f"[s3] ensure prefix failed for {p}: {e}")
 # Register HEIF opener for Pillow
 pillow_heif.register_heif_opener()
 
