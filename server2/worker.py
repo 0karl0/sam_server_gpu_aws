@@ -3,8 +3,11 @@ import time
 import json
 import cv2
 import gc
+import subprocess
+import boto3
 import numpy as np
 from typing import Dict
+from botocore.exceptions import ClientError
 from PIL import Image
 from rembg import remove, new_session
 from segment_anything import (
@@ -38,6 +41,43 @@ except Exception:  # pragma: no cover - torch may not be installed
     _REMBG_PROVIDERS = ["CPUExecutionProvider"]
     DEVICE = "cpu"
 
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+
+
+def get_single_secret_value(secret_name: str) -> dict:
+    session = boto3.session.Session()
+    client = session.client(service_name="secretsmanager", region_name=AWS_REGION)
+    return client.get_secret_value(SecretId=secret_name)
+
+
+def _mount_s3_from_secret(mount_point: str) -> None:
+    global S3_BUCKET
+    S3_BUCKET = os.getenv("S3_BUCKET")
+    if not S3_BUCKET:
+        try:
+            secret = get_single_secret_value("s3bucket")
+            secret_str = secret["SecretString"]
+            try:
+                secret_dict = json.loads(secret_str)
+                S3_BUCKET = secret_dict.get("S3_BUCKET", secret_str)
+            except json.JSONDecodeError:
+                S3_BUCKET = secret_str
+            if S3_BUCKET.startswith("arn:aws:s3:::"):
+                S3_BUCKET = S3_BUCKET.split(":::", 1)[1]
+        except ClientError as e:  # pragma: no cover - network/permission issues
+            print(f"[s3] failed to retrieve bucket secret: {e}")
+            S3_BUCKET = None
+            return
+
+    try:
+        os.makedirs(mount_point, exist_ok=True)
+        if not os.path.ismount(mount_point):
+            subprocess.run(["s3fs", S3_BUCKET, mount_point], check=True)
+        print(f"[s3] mounted s3://{S3_BUCKET} at {mount_point}")
+    except Exception as e:  # pragma: no cover - s3fs not installed or other errors
+        print(f"[s3] failed to mount s3://{S3_BUCKET} at {mount_point}: {e}")
+        S3_BUCKET = None
+
 # -------------------------
 # Config / directories
 # -------------------------
@@ -46,6 +86,7 @@ except Exception:  # pragma: no cover - torch may not be installed
 # Server1 and this GPU worker.  Each user gets their own subdirectory under
 # this base path.
 SHARED_DIR = os.getenv("SHARED_DIR", "/mnt/s3")
+_mount_s3_from_secret(SHARED_DIR)
 
 # All models are shared across users and live in a common directory.
 MODELS_DIR = os.path.join(SHARED_DIR, "models")
