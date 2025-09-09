@@ -219,7 +219,9 @@ def _download_file(url: str, dest: str) -> None:
             os.remove(tmp)
 
 
-ENABLE_MODEL_DOWNLOADS = os.getenv("ENABLE_MODEL_DOWNLOADS") == "0"
+# Model downloads are enabled by default. Set ENABLE_MODEL_DOWNLOADS=0 to skip
+# fetching large files at startup.
+ENABLE_MODEL_DOWNLOADS = os.getenv("ENABLE_MODEL_DOWNLOADS", "1") != "0"
 
 def ensure_models() -> None:
     models = {

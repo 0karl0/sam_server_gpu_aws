@@ -4,6 +4,7 @@ import json
 import cv2
 import gc
 import numpy as np
+from typing import Dict
 from PIL import Image
 from rembg import remove, new_session
 from segment_anything import (
@@ -42,18 +43,51 @@ except Exception:  # pragma: no cover - torch may not be installed
 # -------------------------
 # Base directory for shared storage, overridable via SHARED_DIR env var to
 # point at a network-mounted location (e.g., S3) accessible from both
-# Server1 and this GPU worker.
+# Server1 and this GPU worker.  Each user gets their own subdirectory under
+# this base path.
 SHARED_DIR = os.getenv("SHARED_DIR", "/mnt/s3")
-RESIZED_DIR = os.path.join(SHARED_DIR, "resized")
-MASKS_DIR = os.path.join(SHARED_DIR, "output", "masks")
-SMALLS_DIR = os.path.join(SHARED_DIR, "output", "smalls")
-CROPS_DIR = os.path.join(SHARED_DIR, "output", "crops")
-CONFIG_FILE = os.path.join(SHARED_DIR, "config", "settings.json")
-MODEL_PATH = os.path.join(SHARED_DIR, "models", "vit_l.pth")
-PROCESSED_FILE = os.path.join(SHARED_DIR, "output", "processed.json")
-YOLO_MODELS_DIR = os.path.join(SHARED_DIR, "models")
-POINTS_DIR = os.path.join(SHARED_DIR, "output", "points")
-BOXES_DIR = os.path.join(SHARED_DIR, "output", "boxes")
+
+# All models are shared across users and live in a common directory.
+MODELS_DIR = os.path.join(SHARED_DIR, "models")
+os.makedirs(MODELS_DIR, exist_ok=True)
+MODEL_PATH = os.path.join(MODELS_DIR, "vit_l.pth")
+YOLO_MODELS_DIR = MODELS_DIR
+
+
+def get_user_dirs(username: str) -> Dict[str, str]:
+    """Return the set of directories used for a specific user.
+
+    The returned dictionary contains paths for ``resized``, ``masks``,
+    ``smalls``, ``crops``, ``config`` (settings.json), ``processed``
+    (processed.json), ``points`` and ``boxes``.  All directories are created
+    if they do not yet exist so callers can assume they are present.
+    """
+
+    base = os.path.join(SHARED_DIR, username)
+    dirs = {
+        "resized": os.path.join(base, "resized"),
+        "masks": os.path.join(base, "output", "masks"),
+        "smalls": os.path.join(base, "output", "smalls"),
+        "crops": os.path.join(base, "output", "crops"),
+        "config": os.path.join(base, "config", "settings.json"),
+        "processed": os.path.join(base, "output", "processed.json"),
+        "points": os.path.join(base, "output", "points"),
+        "boxes": os.path.join(base, "output", "boxes"),
+    }
+
+    # Ensure directories exist
+    for path in [
+        dirs["resized"],
+        dirs["masks"],
+        dirs["smalls"],
+        dirs["crops"],
+        os.path.dirname(dirs["config"]),
+        dirs["points"],
+        dirs["boxes"],
+    ]:
+        os.makedirs(path, exist_ok=True)
+
+    return dirs
 
 AREA_THRESH = 1000  # pixel area below which masks are treated as "smalls"
 
@@ -64,16 +98,10 @@ AREA_THRESH = 1000  # pixel area below which masks are treated as "smalls"
 # be used directly and no network call is made.  By setting ``U2NET_HOME`` to
 # our shared models directory, we ensure the pre-downloaded
 # ``birefnet-dis.onnx`` file is picked up automatically.
-os.environ.setdefault("U2NET_HOME", os.path.join(SHARED_DIR, "models"))
+os.environ.setdefault("U2NET_HOME", MODELS_DIR)
 _REMBG_SESSION = new_session("birefnet-dis", providers=_REMBG_PROVIDERS)
 print(f"[Worker] rembg providers: {_REMBG_SESSION.get_providers()}")
 
-
-os.makedirs(MASKS_DIR, exist_ok=True)
-os.makedirs(SMALLS_DIR, exist_ok=True)
-os.makedirs(CROPS_DIR, exist_ok=True)
-os.makedirs(POINTS_DIR, exist_ok=True)
-os.makedirs(BOXES_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 os.makedirs(YOLO_MODELS_DIR, exist_ok=True)
 
@@ -173,7 +201,7 @@ def _crop_with_mask(image_bgr: np.ndarray, mask: np.ndarray) -> list[np.ndarray]
     return crops
 
 
-def _get_yolo_points(image_path: str) -> list[tuple[float, float, int]]:
+def _get_yolo_points(image_path: str, boxes_dir: str) -> list[tuple[float, float, int]]:
     """Run all YOLO models and return midpoints labeled for SAM.
 
     Each returned tuple is ``(x, y, label)`` where ``label`` is ``1`` for
@@ -251,7 +279,7 @@ def _get_yolo_points(image_path: str) -> list[tuple[float, float, int]]:
                         cv2.circle(combined, (int(cx), int(cy)), 3, (0, 0, 255), -1)
             if model_img is not None:
                 out_file = os.path.join(
-                    BOXES_DIR, f"{base_name}-{os.path.splitext(fname)[0]}.png"
+                    boxes_dir, f"{base_name}-{os.path.splitext(fname)[0]}.png"
                 )
                 cv2.imwrite(out_file, model_img)
         except Exception as e:  # pragma: no cover - inference may fail
@@ -259,7 +287,7 @@ def _get_yolo_points(image_path: str) -> list[tuple[float, float, int]]:
 
     if combined is not None:
         try:
-            out_file = os.path.join(BOXES_DIR, f"{base_name}-combined.png")
+            out_file = os.path.join(boxes_dir, f"{base_name}-combined.png")
             cv2.imwrite(out_file, combined)
         except Exception as e:  # pragma: no cover - best effort only
             print(f"[Worker] Failed to save combined boxes for {base_name}: {e}")
@@ -272,6 +300,7 @@ def _save_yolo_points(
     base_name: str,
     width: int,
     height: int,
+    points_dir: str,
 ) -> None:
     """Persist YOLO midpoint data for later display on thumbnails.
 
@@ -281,7 +310,7 @@ def _save_yolo_points(
 
     try:
         data = {"width": width, "height": height, "points": points}
-        out_path = os.path.join(POINTS_DIR, f"{base_name}.json")
+        out_path = os.path.join(points_dir, f"{base_name}.json")
         tmp = out_path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(data, f)
@@ -290,21 +319,21 @@ def _save_yolo_points(
         print(f"[Worker] Failed to save YOLO points for {base_name}: {e}")
 
 
-def load_processed_set():
+def load_processed_set(processed_file: str, masks_dir: str):
     """Build a set of base filenames that have already been processed."""
     processed = set()
     # Load from persisted json if present
-    if os.path.exists(PROCESSED_FILE):
+    if os.path.exists(processed_file):
         try:
-            with open(PROCESSED_FILE, "r") as f:
+            with open(processed_file, "r") as f:
                 processed.update(json.load(f))
         except Exception:
             pass
     # Also include any masks that already exist on disk
     try:
-        mask_files = os.listdir(MASKS_DIR)
+        mask_files = os.listdir(masks_dir)
     except OSError as e:
-        print(f"[Worker] cannot access {MASKS_DIR}: {e}")
+        print(f"[Worker] cannot access {masks_dir}: {e}")
         mask_files = []
     for fname in mask_files:
         if "_mask" in fname:
@@ -313,12 +342,12 @@ def load_processed_set():
     return processed
 
 
-def save_processed_set(processed_set):
+def save_processed_set(processed_set, processed_file: str):
     """Persist processed base filenames to disk atomically."""
-    tmp = PROCESSED_FILE + ".tmp"
+    tmp = processed_file + ".tmp"
     with open(tmp, "w") as f:
         json.dump(sorted(processed_set), f)
-    os.replace(tmp, PROCESSED_FILE)
+    os.replace(tmp, processed_file)
 
 # -------------------------
 # Load SAM model
@@ -329,17 +358,17 @@ sam.to(DEVICE)
 # -------------------------
 # Helper functions
 # -------------------------
-def load_settings():
+def load_settings(config_file: str):
     """Load SAM settings from Server1 JSON file."""
     default = {
         "points_per_side": 32,
         "pred_iou_thresh": 0.88,
         "stability_score_thresh": 0.95,
         "crop_n_layers": 1,
-        "model_type": "vit_l"
+        "model_type": "vit_l",
     }
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE) as f:
+    if os.path.exists(config_file):
+        with open(config_file) as f:
             settings = json.load(f)
         default.update(settings)
     return default
@@ -393,7 +422,7 @@ def generate_masks(image_path, settings, points=None):
 
     return masks, image
 
-def save_masks(masks, image, base_name):
+def save_masks(masks, image, base_name, masks_dir: str, smalls_dir: str):
     """Save each mask individually without merging.
 
     The masks generated by SAM are resized to the original image size and
@@ -413,58 +442,63 @@ def save_masks(masks, image, base_name):
         area = int(seg.sum())
         out = seg * 255
         if area < AREA_THRESH:
-            out_path = os.path.join(SMALLS_DIR, f"{base_name}_small{small_idx}.png")
+            out_path = os.path.join(smalls_dir, f"{base_name}_small{small_idx}.png")
             small_idx += 1
         else:
-            out_path = os.path.join(MASKS_DIR, f"{base_name}_mask{big_idx}.png")
+            out_path = os.path.join(masks_dir, f"{base_name}_mask{big_idx}.png")
             big_idx += 1
         cv2.imwrite(out_path, out)
 
-def process_new_images() -> int:
-    """Process any unprocessed images found in the resized directory.
+def process_new_images(username: str) -> int:
+    """Process any unprocessed images found for ``username``.
 
     Returns the number of images that were processed.
     """
 
-    processed = load_processed_set()
-    settings = load_settings()
+    dirs = get_user_dirs(username)
+    processed = load_processed_set(dirs["processed"], dirs["masks"])
+    settings = load_settings(dirs["config"])
     try:
-        files = [f for f in os.listdir(RESIZED_DIR) if f.endswith((".png", ".jpg", ".jpeg"))]
+        files = [
+            f
+            for f in os.listdir(dirs["resized"])
+            if f.endswith((".png", ".jpg", ".jpeg"))
+        ]
     except OSError as e:
-        print(f"[Worker] cannot access {RESIZED_DIR}: {e}")
+        print(f"[Worker] cannot access {dirs['resized']}: {e}")
         files = []
     new_files = [f for f in files if os.path.splitext(f)[0] not in processed]
     if not new_files:
-        print("[Worker] No new files found on S3")
+        print(f"[Worker] No new files found for {username}")
         return 0
-    print(f"[Worker] Found {len(new_files)} new file(s) on S3: {new_files}")
+    print(f"[Worker] Found {len(new_files)} new file(s) for {username}: {new_files}")
     count = 0
     for f in new_files:
         base = os.path.splitext(f)[0]
-        file_path = os.path.join(RESIZED_DIR, f)
+        file_path = os.path.join(dirs["resized"], f)
         start = time.process_time()
-        print(f"[Worker] Processing {f} ...")
+        print(f"[Worker] Processing {f} for {username} ...")
         try:
             img = cv2.imread(file_path)
             if img is None:
                 continue
             simple = _is_line_drawing(img) or _has_long_lines(img)
-            yolo_points = [] if simple else _get_yolo_points(file_path)
+            yolo_points = [] if simple else _get_yolo_points(file_path, dirs["boxes"])
             if simple or not yolo_points:
                 print("[Worker] Using BirefNet for segmentation")
                 mask = _refine_mask_with_birefnet(img)
                 crops = _crop_with_mask(img, mask)
-                mask_file = os.path.join(MASKS_DIR, f"{base}_mask0.png")
+                mask_file = os.path.join(dirs["masks"], f"{base}_mask0.png")
                 cv2.imwrite(mask_file, mask.astype(np.uint8) * 255)
                 for idx, crop in enumerate(crops):
-                    crop_file = os.path.join(CROPS_DIR, f"{base}_mask0_{idx}.png")
+                    crop_file = os.path.join(dirs["crops"], f"{base}_mask0_{idx}.png")
                     cv2.imwrite(crop_file, crop)
             else:
                 print("[Worker] Using SAM for segmentation")
                 masks, img = generate_masks(file_path, settings, yolo_points)
                 if img is not None and yolo_points:
                     h, w = img.shape[:2]
-                    _save_yolo_points(yolo_points, base, w, h)
+                    _save_yolo_points(yolo_points, base, w, h, dirs["points"])
 
                 if masks:
                     largest = max(
@@ -495,7 +529,7 @@ def process_new_images() -> int:
                             inverse = m.copy()
                             inverse["segmentation"] = np.logical_not(seg)
                             masks.append(inverse)
-                save_masks(masks, img, base)
+                save_masks(masks, img, base, dirs["masks"], dirs["smalls"])
             processed.add(base)
             count += 1
             gc.collect()
@@ -504,14 +538,25 @@ def process_new_images() -> int:
             print(f"elapsed time: {total:.6f} seconds")
         except Exception as e:
             print(f"[Worker] Error processing {f}: {e}")
-    save_processed_set(processed)
+    save_processed_set(processed, dirs["processed"])
     return count
 
 
 def main() -> None:
     while True:
-        processed = process_new_images()
-        if processed == 0:
+        try:
+            users = [
+                d
+                for d in os.listdir(SHARED_DIR)
+                if os.path.isdir(os.path.join(SHARED_DIR, d)) and d != "models"
+            ]
+        except OSError as e:
+            print(f"[Worker] cannot list users in {SHARED_DIR}: {e}")
+            users = []
+        total_processed = 0
+        for user in users:
+            total_processed += process_new_images(user)
+        if total_processed == 0:
             time.sleep(5)
         else:
             time.sleep(1)
