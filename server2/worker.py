@@ -197,7 +197,12 @@ def _get_yolo_points(image_path: str) -> list[tuple[float, float, int]]:
     combined = img.copy() if img is not None else None
 
     print(f"[Worker] Running YOLO models on {image_path}")
-    for fname in os.listdir(YOLO_MODELS_DIR):
+    try:
+        model_files = os.listdir(YOLO_MODELS_DIR)
+    except OSError as e:
+        print(f"[Worker] cannot access {YOLO_MODELS_DIR}: {e}")
+        return points
+    for fname in model_files:
         if not fname.lower().endswith((".pt", ".onnx")):
             continue
         # Skip any non-YOLO models such as the BirefNet weights which share
@@ -296,7 +301,12 @@ def load_processed_set():
         except Exception:
             pass
     # Also include any masks that already exist on disk
-    for fname in os.listdir(MASKS_DIR):
+    try:
+        mask_files = os.listdir(MASKS_DIR)
+    except OSError as e:
+        print(f"[Worker] cannot access {MASKS_DIR}: {e}")
+        mask_files = []
+    for fname in mask_files:
         if "_mask" in fname:
             base = fname.split("_mask")[0]
             processed.add(base)
@@ -418,7 +428,11 @@ def process_new_images() -> int:
 
     processed = load_processed_set()
     settings = load_settings()
-    files = [f for f in os.listdir(RESIZED_DIR) if f.endswith((".png", ".jpg", ".jpeg"))]
+    try:
+        files = [f for f in os.listdir(RESIZED_DIR) if f.endswith((".png", ".jpg", ".jpeg"))]
+    except OSError as e:
+        print(f"[Worker] cannot access {RESIZED_DIR}: {e}")
+        files = []
     new_files = [f for f in files if os.path.splitext(f)[0] not in processed]
     if not new_files:
         print("[Worker] No new files found on S3")

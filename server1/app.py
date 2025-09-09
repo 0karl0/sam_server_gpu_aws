@@ -199,6 +199,8 @@ def _download_file(url: str, dest: str) -> None:
             os.remove(tmp)
 
 
+ENABLE_MODEL_DOWNLOADS = os.getenv("ENABLE_MODEL_DOWNLOADS") == "1"
+
 def ensure_models() -> None:
     models = {
         "vit_l.pth": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
@@ -211,7 +213,10 @@ def ensure_models() -> None:
         _download_file(url, os.path.join(MODELS_DIR, fname))
 
 
-ensure_models()
+if ENABLE_MODEL_DOWNLOADS:
+    ensure_models()
+else:
+    print("Model downloads disabled; skipping ensure_models()")
 
 
 # -------------------------
@@ -252,11 +257,20 @@ def stop_gpu_instance() -> None:
 
 def has_unprocessed_files() -> bool:
     """Check all user directories for any resized images not yet processed."""
-    for user in os.listdir(SHARED_DIR):
+    try:
+        users = os.listdir(SHARED_DIR)
+    except OSError as e:
+        print(f"[has_unprocessed_files] cannot access {SHARED_DIR}: {e}")
+        return False
+    for user in users:
         resized_dir = os.path.join(SHARED_DIR, user, "resized")
         if not os.path.isdir(resized_dir):
             continue
-        files = [f for f in os.listdir(resized_dir) if f.lower().endswith(".png")]
+        try:
+            files = [f for f in os.listdir(resized_dir) if f.lower().endswith(".png")]
+        except OSError as e:
+            print(f"[has_unprocessed_files] cannot access {resized_dir}: {e}")
+            continue
         if not files:
             continue
         processed_file = os.path.join(SHARED_DIR, user, "output", "processed.json")
@@ -624,7 +638,12 @@ def list_originals():
     albums = []
 
     # Include every normalized original (PNG) in INPUT_DIR
-    for f in sorted(os.listdir(INPUT_DIR)):
+    try:
+        input_files = sorted(os.listdir(INPUT_DIR))
+    except OSError as e:
+        print(f"[albums] cannot access {INPUT_DIR}: {e}")
+        input_files = []
+    for f in input_files:
         if not f.lower().endswith(".png"):
             continue
         crop_files = index.get(f, [])
@@ -724,7 +743,12 @@ def clear_all():
     """Remove all processed images and trackers."""
     dirs = [INPUT_DIR, RESIZED_DIR, MASKS_DIR, CROPS_DIR, SMALLS_DIR, THUMBS_DIR]
     for d in dirs:
-        for name in os.listdir(d):
+        try:
+            names = os.listdir(d)
+        except OSError as e:
+            print(f"[clear_all] cannot access {d}: {e}")
+            continue
+        for name in names:
             path = os.path.join(d, name)
             try:
                 if os.path.isfile(path) or os.path.islink(path):
@@ -797,11 +821,22 @@ def process_mask_file(mask_path: str):
 def mask_watcher_loop():
     while True:
         try:
-            for user in os.listdir(SHARED_DIR):
+            try:
+                users = os.listdir(SHARED_DIR)
+            except OSError as e:
+                print(f"[mask_watcher] cannot access {SHARED_DIR}: {e}")
+                time.sleep(0.5)
+                continue
+            for user in users:
                 mask_dir = os.path.join(SHARED_DIR, user, "output", "masks")
                 if not os.path.isdir(mask_dir):
                     continue
-                for fname in os.listdir(mask_dir):
+                try:
+                    mask_files = os.listdir(mask_dir)
+                except OSError as e:
+                    print(f"[mask_watcher] cannot access {mask_dir}: {e}")
+                    continue
+                for fname in mask_files:
                     if not fname.lower().endswith(".png"):
                         continue
                     fpath = os.path.join(mask_dir, fname)
