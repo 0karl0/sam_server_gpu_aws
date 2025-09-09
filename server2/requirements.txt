@@ -1,4 +1,4 @@
-opencv-python
+opencv-python-headless
 numpy
 git+https://github.com/facebookresearch/segment-anything.git
 rembg[gpu]
