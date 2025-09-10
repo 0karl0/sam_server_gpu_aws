@@ -196,6 +196,8 @@ sagemaker_client = (
 
 # Track which mask files have been processed into crops
 _processed_mask_files = set()
+# Track which resized images are currently being processed by SageMaker
+_processing_jobs = set()
 
 
 # -------------------------
@@ -537,52 +539,59 @@ def _mark_processed(stem: str) -> None:
 
 
 def run_sagemaker_job(stem: str, username: str) -> None:
-    if not (SAGEMAKER_ENDPOINT and S3_BUCKET and s3_client and sm_client):
+    job_key = (username, stem)
+    if job_key in _processing_jobs:
         return
-    set_user_dirs(username)
-    resized_path = os.path.join(RESIZED_DIR, f"{stem}.png")
-    if not os.path.exists(resized_path):
-        return
-    print(f"[sagemaker] starting job for user {username} and file {stem}.png")
-    input_key = f"{username}/resized/{stem}.png"
-    output_key = f"{username}/output/{stem}_mask0.png"
+    _processing_jobs.add(job_key)
     try:
-        print(f"[sagemaker] uploading {resized_path} to s3://{S3_BUCKET}/{input_key}")
-        s3_client.upload_file(resized_path, S3_BUCKET, input_key)
-        print("[sagemaker] upload complete; invoking server2")
-    except Exception as e:
-        print(f"[sagemaker] upload failed: {e}")
-        return
-    payload = {"s3": f"s3://{S3_BUCKET}/{input_key}", "output": f"s3://{S3_BUCKET}/{output_key}"}
-    try:
-        print(f"[sagemaker] invoking endpoint {SAGEMAKER_ENDPOINT} with payload {payload}")
-        response = sm_client.invoke_endpoint(
-            EndpointName=SAGEMAKER_ENDPOINT,
-            ContentType="application/json",
-            Body=json.dumps(payload),
-        )
-        status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-        if status != 200:
-            body = response.get("Body")
-            body_text = body.read().decode() if body else ""
-            print(f"[sagemaker] invoke returned {status}: {body_text}")
-        else:
-            print(f"[sagemaker] server2 acknowledged request with status {status}")
-    except Exception as e:
-        print(f"[sagemaker] invoke failed: {e}")
-        return
-    local_mask = os.path.join(MASKS_DIR, f"{stem}_mask0.png")
-    try:
-        print(f"[sagemaker] downloading result s3://{S3_BUCKET}/{output_key} to {local_mask}")
-        s3_client.download_file(S3_BUCKET, output_key, local_mask)
-        print("[sagemaker] download complete; processing mask")
-    except Exception as e:
-        print(f"[sagemaker] download failed: {e}")
-        return
-    process_mask_file(local_mask)
-    _processed_mask_files.add(local_mask)
-    _mark_processed(stem)
-    print(f"[sagemaker] job complete for {stem}")
+        if not (SAGEMAKER_ENDPOINT and S3_BUCKET and s3_client and sm_client):
+            return
+        set_user_dirs(username)
+        resized_path = os.path.join(RESIZED_DIR, f"{stem}.png")
+        if not os.path.exists(resized_path):
+            return
+        print(f"[sagemaker] starting job for user {username} and file {stem}.png")
+        input_key = f"{username}/resized/{stem}.png"
+        output_key = f"{username}/output/{stem}_mask0.png"
+        try:
+            print(f"[sagemaker] uploading {resized_path} to s3://{S3_BUCKET}/{input_key}")
+            s3_client.upload_file(resized_path, S3_BUCKET, input_key)
+            print("[sagemaker] upload complete; invoking server2")
+        except Exception as e:
+            print(f"[sagemaker] upload failed: {e}")
+            return
+        payload = {"s3": f"s3://{S3_BUCKET}/{input_key}", "output": f"s3://{S3_BUCKET}/{output_key}"}
+        try:
+            print(f"[sagemaker] invoking endpoint {SAGEMAKER_ENDPOINT} with payload {payload}")
+            response = sm_client.invoke_endpoint(
+                EndpointName=SAGEMAKER_ENDPOINT,
+                ContentType="application/json",
+                Body=json.dumps(payload),
+            )
+            status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if status != 200:
+                body = response.get("Body")
+                body_text = body.read().decode() if body else ""
+                print(f"[sagemaker] invoke returned {status}: {body_text}")
+            else:
+                print(f"[sagemaker] server2 acknowledged request with status {status}")
+        except Exception as e:
+            print(f"[sagemaker] invoke failed: {e}")
+            return
+        local_mask = os.path.join(MASKS_DIR, f"{stem}_mask0.png")
+        try:
+            print(f"[sagemaker] downloading result s3://{S3_BUCKET}/{output_key} to {local_mask}")
+            s3_client.download_file(S3_BUCKET, output_key, local_mask)
+            print("[sagemaker] download complete; processing mask")
+        except Exception as e:
+            print(f"[sagemaker] download failed: {e}")
+            return
+        process_mask_file(local_mask)
+        _processed_mask_files.add(local_mask)
+        _mark_processed(stem)
+        print(f"[sagemaker] job complete for {stem}")
+    finally:
+        _processing_jobs.discard(job_key)
 
 # -------------------------
 # Authentication
@@ -900,6 +909,46 @@ def process_mask_file(mask_path: str):
     index[f"{base}.png"] = crops_for_original
     save_crops_index(index)
 
+def resized_watcher_loop():
+    while True:
+        try:
+            try:
+                users = os.listdir(SHARED_DIR)
+            except OSError as e:
+                print(f"[resized_watcher] cannot access {SHARED_DIR}: {e}")
+                time.sleep(0.5)
+                continue
+            for user in users:
+                resized_dir = os.path.join(SHARED_DIR, user, "resized")
+                if not os.path.isdir(resized_dir):
+                    continue
+                processed_file = os.path.join(SHARED_DIR, user, "output", "processed.json")
+                processed = set()
+                if os.path.exists(processed_file):
+                    try:
+                        with open(processed_file, "r") as f:
+                            processed = set(json.load(f))
+                    except Exception:
+                        pass
+                try:
+                    files = [f for f in os.listdir(resized_dir) if f.lower().endswith(".png")]
+                except OSError as e:
+                    print(f"[resized_watcher] cannot access {resized_dir}: {e}")
+                    continue
+                for fname in files:
+                    stem, _ = os.path.splitext(fname)
+                    key = (user, stem)
+                    if stem in processed or key in _processing_jobs:
+                        continue
+                    threading.Thread(
+                        target=run_sagemaker_job,
+                        args=(stem, user),
+                        daemon=True,
+                    ).start()
+        except Exception as e:
+            print(f"[resized_watcher] error: {e}")
+        time.sleep(0.5)
+
 def mask_watcher_loop():
     while True:
         try:
@@ -933,6 +982,7 @@ def mask_watcher_loop():
         time.sleep(0.5)  # light polling
 
 # Start background watcher before serving
+threading.Thread(target=resized_watcher_loop, daemon=True).start()
 threading.Thread(target=mask_watcher_loop, daemon=True).start()
 threading.Thread(target=gpu_monitor_loop, daemon=True).start()
 
