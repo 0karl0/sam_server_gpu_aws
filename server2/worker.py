@@ -126,7 +126,7 @@ AREA_THRESH = 1000  # pixel area below which masks are treated as "smalls"
 os.environ["U2NET_HOME"] = MODELS_DIR
 _BIRE_NET_ONNX = os.path.join(MODELS_DIR, "birefnet-dis.onnx")
 if not os.path.exists(_BIRE_NET_ONNX):
-    print(f'No path found for birefnet-dis.onnx in {_BIRE_NET_ONNX)}')
+    print(f'No path found for birefnet-dis.onnx in {_BIRE_NET_ONNX}')
     try:
         s3_client.download_file(
             "sam-server-shared-1757292440",
