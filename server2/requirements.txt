@@ -6,6 +6,6 @@ ultralytics
 flask
 gunicorn
 boto3
-#birefnet
-
-#segment-anything  # if pip-installable, else clone from github in Dockerfile
+onnx 
+onnxruntime 
+onnxruntime-gpu
