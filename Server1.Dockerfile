@@ -5,6 +5,8 @@ FROM python:3.10-slim
 # are emitted in real time.  Without this the application appeared to
 # hang because stdout was block-buffered until the buffer filled.
 ENV PYTHONUNBUFFERED=1
+# Disable model downloads; SageMaker provides required weights
+ENV ENABLE_MODEL_DOWNLOADS=0
 
 WORKDIR /app
 

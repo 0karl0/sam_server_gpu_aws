@@ -220,9 +220,9 @@ def _download_file(url: str, dest: str) -> None:
             os.remove(tmp)
 
 
-# Model downloads are enabled by default. Set ENABLE_MODEL_DOWNLOADS=0 to skip
-# fetching large files at startup.
-ENABLE_MODEL_DOWNLOADS = os.getenv("ENABLE_MODEL_DOWNLOADS", "0") 
+# Model downloads are disabled by default. Set ENABLE_MODEL_DOWNLOADS=1 to
+# fetch required weights at startup if desired.
+ENABLE_MODEL_DOWNLOADS = os.getenv("ENABLE_MODEL_DOWNLOADS") == "1"
 
 def ensure_models() -> None:
     models = {
@@ -240,6 +240,24 @@ if ENABLE_MODEL_DOWNLOADS:
     ensure_models()
 else:
     print("Model downloads disabled; skipping ensure_models()")
+
+
+def notify_sagemaker_startup() -> None:
+    """Send a simple startup notification to the SageMaker endpoint."""
+    if not (SAGEMAKER_ENDPOINT and sm_client):
+        return
+    try:
+        sm_client.invoke_endpoint(
+            EndpointName=SAGEMAKER_ENDPOINT,
+            ContentType="application/json",
+            Body=json.dumps({"event": "server1_startup"}),
+        )
+        print(f"[sagemaker] notified {SAGEMAKER_ENDPOINT} of server1 startup")
+    except Exception as e:  # pragma: no cover - best effort
+        print(f"[sagemaker] startup notification failed: {e}")
+
+
+notify_sagemaker_startup()
 
 
 # -------------------------
