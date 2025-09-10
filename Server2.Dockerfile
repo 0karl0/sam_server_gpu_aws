@@ -22,7 +22,7 @@ RUN pip3 install --no-cache-dir \
 COPY server2/requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
 
-RUN rembg d u2net
+#RUN rembg d u2net
 
 # Entrypoint + app
 COPY server2/serve /usr/local/bin/serve
