@@ -121,8 +121,9 @@ AREA_THRESH = 1000  # pixel area below which masks are treated as "smalls"
 # Load BirefNet ONNX model from a shared S3 bucket using ``rembg``.
 #
 # The model weights live in ``s3://sam-server-shared-1757292440/models`` and are
-# downloaded on demand into the shared models directory.  Passing the local path
-# to ``new_session`` avoids using the separate ``birefnet`` package.
+# downloaded on demand into the shared models directory.  ``rembg`` looks up
+# models by *name*, not by file path, so we place the ONNX file in ``U2NET_HOME``
+# and request the ``birefnet-dis`` session explicitly.
 os.environ.setdefault("U2NET_HOME", MODELS_DIR)
 _BIRE_NET_ONNX = os.path.join(MODELS_DIR, "birefnet-dis.onnx")
 if not os.path.exists(_BIRE_NET_ONNX):
@@ -135,7 +136,7 @@ if not os.path.exists(_BIRE_NET_ONNX):
     except ClientError as e:  # pragma: no cover - network/permission issues
         print(f"[s3] failed to download BirefNet model: {e}")
 
-_REMBG_SESSION = new_session(_BIRE_NET_ONNX, providers=_REMBG_PROVIDERS)
+_REMBG_SESSION = new_session("birefnet-dis", providers=_REMBG_PROVIDERS)
 print(
     f"[Worker] rembg providers: {_REMBG_SESSION.inner_session.get_providers()}"
 )
