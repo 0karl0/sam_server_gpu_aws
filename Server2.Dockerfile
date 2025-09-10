@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu20.04
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu20.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -6,7 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip ca-certificates libglib2.0-0 libgl1 git \
+    python3 python3-pip python-is-python3 curl ca-certificates libglib2.0-0 libgl1 git \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Make sure pip is new enough to handle PyTorch indexes
@@ -20,6 +21,8 @@ RUN pip3 install --no-cache-dir \
 # App deps
 COPY server2/requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+
+RUN rembg d u2net
 
 # Entrypoint + app
 COPY server2/serve /usr/local/bin/serve
