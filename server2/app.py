@@ -1,10 +1,7 @@
-import json
 import os
-import subprocess
 from pathlib import Path
 
 import boto3
-from botocore.exceptions import ClientError
 import cv2
 from flask import Flask, jsonify, request
 import logging
@@ -14,45 +11,6 @@ app = Flask(__name__)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-SHARED_DIR = os.getenv("SHARED_DIR", "/mnt/s3")
-
-
-def get_single_secret_value(secret_name: str) -> dict:
-    session = boto3.session.Session()
-    client = session.client(service_name="secretsmanager", region_name=AWS_REGION)
-    return client.get_secret_value(SecretId=secret_name)
-
-
-def _mount_s3_from_secret(mount_point: str) -> None:
-    bucket = os.getenv("S3_BUCKET")
-    if not bucket:
-        try:
-            secret = get_single_secret_value("s3bucket")
-            secret_str = secret["SecretString"]
-            try:
-                secret_dict = json.loads(secret_str)
-                bucket = secret_dict.get("S3_BUCKET", secret_str)
-            except json.JSONDecodeError:
-                bucket = secret_str
-            if bucket.startswith("arn:aws:s3:::"):
-                bucket = bucket.split(":::", 1)[1]
-        except ClientError as e:  # pragma: no cover
-            logger.error("[s3] failed to retrieve bucket secret: %s", e)
-            return
-
-    try:
-        os.makedirs(mount_point, exist_ok=True)
-        if not os.path.ismount(mount_point):
-            subprocess.run(["s3fs", bucket, mount_point], check=True)
-        logger.info("[s3] mounted s3://%s at %s", bucket, mount_point)
-    except Exception as e:  # pragma: no cover
-        logger.error("[s3] failed to mount s3://%s at %s: %s", bucket, mount_point, e)
-
-
-_mount_s3_from_secret(SHARED_DIR)
 
 
 @app.route("/ping", methods=["GET"])

@@ -30,7 +30,8 @@ import pillow_heif  # enables HEIC/HEIF decode in Pillow
 # -------------------------
 # Base directory for shared storage. Defaults to "/mnt/s3" but can be
 # overridden via the SHARED_DIR environment variable so both servers can point
-# to a common network location (e.g., an S3 mount).
+# to a common local path. S3 access is handled via boto3 rather than a mounted
+# filesystem.
 SHARED_DIR   = os.getenv("SHARED_DIR", "/mnt/s3")
 
 # Paths that depend on the logged-in user. They are initialized for a generic

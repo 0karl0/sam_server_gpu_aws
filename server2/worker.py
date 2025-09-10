@@ -3,7 +3,6 @@ import time
 import json
 import cv2
 import gc
-import subprocess
 import boto3
 import numpy as np
 from typing import Dict
@@ -42,6 +41,8 @@ except Exception:  # pragma: no cover - torch may not be installed
     DEVICE = "cpu"
 
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+s3_client = boto3.client("s3", region_name=AWS_REGION)
+S3_BUCKET = os.getenv("S3_BUCKET")
 
 
 def get_single_secret_value(secret_name: str) -> dict:
@@ -50,43 +51,28 @@ def get_single_secret_value(secret_name: str) -> dict:
     return client.get_secret_value(SecretId=secret_name)
 
 
-def _mount_s3_from_secret(mount_point: str) -> None:
-    global S3_BUCKET
-    S3_BUCKET = os.getenv("S3_BUCKET")
-    if not S3_BUCKET:
-        try:
-            secret = get_single_secret_value("s3bucket")
-            secret_str = secret["SecretString"]
-            try:
-                secret_dict = json.loads(secret_str)
-                S3_BUCKET = secret_dict.get("S3_BUCKET", secret_str)
-            except json.JSONDecodeError:
-                S3_BUCKET = secret_str
-            if S3_BUCKET.startswith("arn:aws:s3:::"):
-                S3_BUCKET = S3_BUCKET.split(":::", 1)[1]
-        except ClientError as e:  # pragma: no cover - network/permission issues
-            print(f"[s3] failed to retrieve bucket secret: {e}")
-            S3_BUCKET = None
-            return
-
+if not S3_BUCKET:
     try:
-        os.makedirs(mount_point, exist_ok=True)
-        if not os.path.ismount(mount_point):
-            subprocess.run(["s3fs", S3_BUCKET, mount_point], check=True)
-        print(f"[s3] mounted s3://{S3_BUCKET} at {mount_point}")
-    except Exception as e:  # pragma: no cover - s3fs not installed or other errors
-        print(f"[s3] failed to mount s3://{S3_BUCKET} at {mount_point}: {e}")
+        secret = get_single_secret_value("s3bucket")
+        secret_str = secret["SecretString"]
+        try:
+            secret_dict = json.loads(secret_str)
+            S3_BUCKET = secret_dict.get("S3_BUCKET", secret_str)
+        except json.JSONDecodeError:
+            S3_BUCKET = secret_str
+        if S3_BUCKET.startswith("arn:aws:s3:::"):
+            S3_BUCKET = S3_BUCKET.split(":::", 1)[1]
+    except ClientError as e:  # pragma: no cover - network/permission issues
+        print(f"[s3] failed to retrieve bucket secret: {e}")
         S3_BUCKET = None
 
 # -------------------------
 # Config / directories
 # -------------------------
-# Base directory for shared storage, overridable via SHARED_DIR env var to
-# point at a network-mounted location (e.g., S3) accessible from both
-# Server1 and this GPU worker.  Each user gets their own subdirectory under
-# this base path.
-SHARED_DIR = os.getenv("SHARED_DIR", "/mnt/s3")
-_mount_s3_from_secret(SHARED_DIR)
+# Base directory for temporary processing. Files are downloaded from S3 on
+# demand via boto3 instead of relying on a mounted S3 filesystem.
+SHARED_DIR = os.getenv("SHARED_DIR", "/tmp/shared")
+os.makedirs(SHARED_DIR, exist_ok=True)
 
 # All models are shared across users and live in a common directory.
 MODELS_DIR = os.path.join(SHARED_DIR, "models")

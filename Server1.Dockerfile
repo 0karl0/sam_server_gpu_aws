@@ -9,7 +9,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
-    libglib2.0-0 s3fs \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 
