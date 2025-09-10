@@ -497,16 +497,19 @@ def run_sagemaker_job(stem: str, username: str) -> None:
     resized_path = os.path.join(RESIZED_DIR, f"{stem}.png")
     if not os.path.exists(resized_path):
         return
+    print(f"[sagemaker] starting job for user {username} and file {stem}.png")
     input_key = f"{username}/resized/{stem}.png"
     output_key = f"{username}/output/{stem}_mask0.png"
     try:
+        print(f"[sagemaker] uploading {resized_path} to s3://{S3_BUCKET}/{input_key}")
         s3_client.upload_file(resized_path, S3_BUCKET, input_key)
-        print(f"[sagemaker] uploaded {resized_path} to s3://{S3_BUCKET}/{input_key}")
+        print("[sagemaker] upload complete; invoking server2")
     except Exception as e:
         print(f"[sagemaker] upload failed: {e}")
         return
     payload = {"s3": f"s3://{S3_BUCKET}/{input_key}", "output": f"s3://{S3_BUCKET}/{output_key}"}
     try:
+        print(f"[sagemaker] invoking endpoint {SAGEMAKER_ENDPOINT} with payload {payload}")
         response = sm_client.invoke_endpoint(
             EndpointName=SAGEMAKER_ENDPOINT,
             ContentType="application/json",
@@ -517,19 +520,23 @@ def run_sagemaker_job(stem: str, username: str) -> None:
             body = response.get("Body")
             body_text = body.read().decode() if body else ""
             print(f"[sagemaker] invoke returned {status}: {body_text}")
+        else:
+            print(f"[sagemaker] server2 acknowledged request with status {status}")
     except Exception as e:
         print(f"[sagemaker] invoke failed: {e}")
         return
     local_mask = os.path.join(MASKS_DIR, f"{stem}_mask0.png")
     try:
+        print(f"[sagemaker] downloading result s3://{S3_BUCKET}/{output_key} to {local_mask}")
         s3_client.download_file(S3_BUCKET, output_key, local_mask)
-        print(f"[sagemaker] downloaded s3://{S3_BUCKET}/{output_key} to {local_mask}")
+        print("[sagemaker] download complete; processing mask")
     except Exception as e:
         print(f"[sagemaker] download failed: {e}")
         return
     process_mask_file(local_mask)
     _processed_mask_files.add(local_mask)
     _mark_processed(stem)
+    print(f"[sagemaker] job complete for {stem}")
 
 # -------------------------
 # Authentication
