@@ -55,6 +55,7 @@ if not S3_BUCKET:
         try:
             secret_dict = json.loads(secret_str)
             S3_BUCKET = secret_dict.get("S3_BUCKET", secret_str)
+            print(f"found {S3_BUCKET}")
         except json.JSONDecodeError:
             S3_BUCKET = secret_str
         if S3_BUCKET.startswith("arn:aws:s3:::"):
@@ -62,6 +63,7 @@ if not S3_BUCKET:
     except ClientError as e:  # pragma: no cover - network/permission issues
         print(f"[s3] failed to retrieve bucket secret: {e}")
         S3_BUCKET = None
+print(f"found {S3_BUCKET}")
 
 # -------------------------
 # Config / directories
@@ -77,7 +79,7 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 MODEL_PATH = os.path.join(MODELS_DIR, "vit_l.pth")
 YOLO_MODELS_DIR = MODELS_DIR
 
-
+## WHERE is the path for bire-dis?
 def get_user_dirs(username: str) -> Dict[str, str]:
     """Return the set of directories used for a specific user.
 
@@ -124,6 +126,7 @@ AREA_THRESH = 1000  # pixel area below which masks are treated as "smalls"
 os.environ["U2NET_HOME"] = MODELS_DIR
 _BIRE_NET_ONNX = os.path.join(MODELS_DIR, "birefnet-dis.onnx")
 if not os.path.exists(_BIRE_NET_ONNX):
+    print(f'No path found for birefnet-dis.onnx in {_BIRE_NET_ONNX)}')
     try:
         s3_client.download_file(
             "sam-server-shared-1757292440",
@@ -144,6 +147,9 @@ print(
 
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 os.makedirs(YOLO_MODELS_DIR, exist_ok=True)
+
+
+
 
 
 def _refine_mask_with_rembg(image_bgr: np.ndarray) -> np.ndarray:
@@ -392,6 +398,19 @@ def save_processed_set(processed_set, processed_file: str):
 # -------------------------
 # Load SAM model
 # -------------------------
+_SAM_MODEL = os.path.join(MODELS_DIR, "vit_l.vth")
+if not os.path.exists(_SAM_MODEL):
+    print(f'No path found for vit_l.vthin {_SAM_MODEL}')
+    try:
+        s3_client.download_file(
+            "sam-server-shared-1757292440",
+            "models/vit_l.pth",
+            _SAM_MODEL,
+        )
+    except ClientError as e:  # pragma: no cover - network/permission issues
+        print(f"[s3] failed to download SAM model: {e}")
+
+
 sam = sam_model_registry["vit_l"](checkpoint=MODEL_PATH)
 sam.to(DEVICE)
 
@@ -583,6 +602,8 @@ def process_new_images(username: str) -> int:
 
 
 def main() -> None:
+    mod_dir = {SHARED_DIR}+'/models'
+    print(f'Files in SHARED_DIR: {mod_dir}: {os.listdir(mod_dir)}')
     while True:
         try:
             users = [
@@ -595,6 +616,7 @@ def main() -> None:
             users = []
         total_processed = 0
         for user in users:
+            print(f'looking at user: {user}')
             total_processed += process_new_images(user)
         if total_processed == 0:
             time.sleep(5)
