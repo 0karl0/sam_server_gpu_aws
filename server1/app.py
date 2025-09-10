@@ -296,6 +296,32 @@ def stop_gpu_instance() -> None:
         print(f"Failed to scale endpoint: {e}")
 
 
+def _ensure_resized_from_input(user: str) -> None:
+    """Generate /resized copies for any originals in /input missing them."""
+    input_dir = os.path.join(SHARED_DIR, user, "input")
+    if not os.path.isdir(input_dir):
+        return
+    resized_dir = os.path.join(SHARED_DIR, user, "resized")
+    try:
+        files = [f for f in os.listdir(input_dir)
+                 if f.rsplit(".", 1)[-1].lower() in ALLOWED_EXT]
+    except OSError as e:
+        print(f"[_ensure_resized_from_input] cannot access {input_dir}: {e}")
+        return
+    for f in files:
+        stem, _ = os.path.splitext(f)
+        dst = os.path.join(resized_dir, f"{stem}.png")
+        if os.path.exists(dst):
+            continue
+        src = os.path.join(input_dir, f)
+        try:
+            img = Image.open(src)
+        except Exception as e:  # pragma: no cover - best effort
+            print(f"[_ensure_resized_from_input] failed to open {src}: {e}")
+            continue
+        normalize_to_png_and_save(img, dst, longest_side=MAX_RESIZE)
+
+
 def has_unprocessed_files() -> bool:
     """Check all user directories for any resized images not yet processed."""
     try:
@@ -304,6 +330,7 @@ def has_unprocessed_files() -> bool:
         print(f"[has_unprocessed_files] cannot access {SHARED_DIR}: {e}")
         return False
     for user in users:
+        _ensure_resized_from_input(user)
         resized_dir = os.path.join(SHARED_DIR, user, "resized")
         if not os.path.isdir(resized_dir):
             continue
