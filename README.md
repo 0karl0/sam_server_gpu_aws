@@ -26,6 +26,9 @@ When a user logs in, Server1 scales a SageMaker endpoint variant up to one
 instance via the AWS API. Server1 monitors the queue and scales the endpoint
 back to zero five minutes after no images remain, restarting it when new files
 appear.
+It also watches each user's `resized/` directory and invokes the SageMaker
+endpoint for any new images found, so files added outside the upload workflow
+are processed automatically.
 
 ```
 docker run -it --rm -p 5050:5050 \
