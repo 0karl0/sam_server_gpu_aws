@@ -6,6 +6,5 @@ ultralytics
 flask
 gunicorn
 boto3
-onnx 
-onnxruntime 
+onnx
 onnxruntime-gpu

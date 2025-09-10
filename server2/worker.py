@@ -143,17 +143,16 @@ if not os.path.exists(_BIRE_NET_ONNX):
 
 try:
     _REMBG_SESSION = new_session(
-        "birefnet-dis", providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+        "birefnet-dis", providers=["CUDAExecutionProvider"]
     )
 except ValueError:
     logger.warning("[rembg] falling back to default session")
-    _REMBG_SESSION = new_session(
-        providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
-    )
-logger.info(
-    "[Worker] rembg providers: %s",
-    _REMBG_SESSION.inner_session.get_providers(),
-)
+    _REMBG_SESSION = new_session(providers=["CUDAExecutionProvider"])
+
+providers = _REMBG_SESSION.inner_session.get_providers()
+if "CUDAExecutionProvider" not in providers:
+    raise RuntimeError("rembg is not configured with CUDAExecutionProvider")
+logger.info("[Worker] rembg providers: %s", providers)
 
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 os.makedirs(YOLO_MODELS_DIR, exist_ok=True)
