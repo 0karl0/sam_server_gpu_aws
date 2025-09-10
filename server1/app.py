@@ -552,7 +552,12 @@ def run_sagemaker_job(stem: str, username: str) -> None:
             return
         print(f"[sagemaker] starting job for user {username} and file {stem}.png")
         input_key = f"{username}/resized/{stem}.png"
-        output_key = f"{username}/output/{stem}_mask0.png"
+        # Server2 expects the ``output`` parameter to be a directory prefix where
+        # all generated files are written.  Previously we provided a full object
+        # path which resulted in files being uploaded to an unexpected
+        # subdirectory and the subsequent download failing.  Supply only the
+        # prefix and download the expected mask file explicitly.
+        output_prefix = f"{username}/output/"
         try:
             print(f"[sagemaker] uploading {resized_path} to s3://{S3_BUCKET}/{input_key}")
             s3_client.upload_file(resized_path, S3_BUCKET, input_key)
@@ -560,7 +565,7 @@ def run_sagemaker_job(stem: str, username: str) -> None:
         except Exception as e:
             print(f"[sagemaker] upload failed: {e}")
             return
-        payload = {"s3": f"s3://{S3_BUCKET}/{input_key}", "output": f"s3://{S3_BUCKET}/{output_key}"}
+        payload = {"s3": f"s3://{S3_BUCKET}/{input_key}", "output": f"s3://{S3_BUCKET}/{output_prefix}"}
         try:
             print(f"[sagemaker] invoking endpoint {SAGEMAKER_ENDPOINT} with payload {payload}")
             response = sm_client.invoke_endpoint(
@@ -579,9 +584,10 @@ def run_sagemaker_job(stem: str, username: str) -> None:
             print(f"[sagemaker] invoke failed: {e}")
             return
         local_mask = os.path.join(MASKS_DIR, f"{stem}_mask0.png")
+        mask_key = f"{output_prefix}{stem}_mask0.png"
         try:
-            print(f"[sagemaker] downloading result s3://{S3_BUCKET}/{output_key} to {local_mask}")
-            s3_client.download_file(S3_BUCKET, output_key, local_mask)
+            print(f"[sagemaker] downloading result s3://{S3_BUCKET}/{mask_key} to {local_mask}")
+            s3_client.download_file(S3_BUCKET, mask_key, local_mask)
             print("[sagemaker] download complete; processing mask")
         except Exception as e:
             print(f"[sagemaker] download failed: {e}")
