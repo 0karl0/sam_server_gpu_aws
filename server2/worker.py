@@ -400,8 +400,9 @@ def save_processed_set(processed_set, processed_file: str):
 # -------------------------
 _SAM_MODEL = os.path.join(MODELS_DIR, "vit_l.vth")
 if not os.path.exists(_SAM_MODEL):
-    print(f'No path found for vit_l.vthin {_SAM_MODEL}')
+    print(f'No path found for vit_l.vth in {_SAM_MODEL}')
     try:
+        print(f'downloading from sam-server-shared-xxx440 to {_SAM_MODEL}')
         s3_client.download_file(
             "sam-server-shared-1757292440",
             "models/vit_l.pth",
@@ -409,7 +410,9 @@ if not os.path.exists(_SAM_MODEL):
         )
     except ClientError as e:  # pragma: no cover - network/permission issues
         print(f"[s3] failed to download SAM model: {e}")
-
+mod_dir = {SHARED_DIR}+'/models'
+print(f'Files in SHARED_DIR: {mod_dir}: {os.listdir(mod_dir)}')
+print(f'Path found for vit_l.vth in {_SAM_MODEL}')
 
 sam = sam_model_registry["vit_l"](checkpoint=MODEL_PATH)
 sam.to(DEVICE)
