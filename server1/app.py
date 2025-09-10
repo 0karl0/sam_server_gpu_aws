@@ -174,8 +174,31 @@ if S3_BUCKET.startswith("arn:aws:s3:::"):
 
 print(f'here is the s3 bucket were trying to load: {S3_BUCKET}')
 
+# Load AWS credentials from Secrets Manager, if provided
+AWS_CREDS_SECRET = os.getenv("AWS_CREDS_SECRET", "aws-credentials")
+aws_session = boto3.session.Session(region_name=AWS_REGION)
+if AWS_CREDS_SECRET:
+    print("loading aws creds")
+    try:
+        secret = get_single_secret_value(AWS_CREDS_SECRET)
+        creds_str = secret["SecretString"]
+        creds = json.loads(creds_str)
+        os.environ["AWS_ACCESS_KEY_ID"] = creds.get("AWS_ACCESS_KEY_ID", "")
+        os.environ["AWS_SECRET_ACCESS_KEY"] = creds.get("AWS_SECRET_ACCESS_KEY", "")
+        if creds.get("AWS_SESSION_TOKEN"):
+            os.environ["AWS_SESSION_TOKEN"] = creds["AWS_SESSION_TOKEN"]
+        aws_session = boto3.session.Session(
+            aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+            aws_session_token=os.environ.get("AWS_SESSION_TOKEN"),
+            region_name=AWS_REGION,
+        )
+        print("[aws] credentials loaded from secrets")
+    except Exception as e:
+        print(f"[aws] failed to load credentials from secret '{AWS_CREDS_SECRET}': {e}")
+
 #S3_BUCKET = os.getenv("S3_BUCKET","sam-server-shared-1757294775")
-s3_client = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
+s3_client = aws_session.client("s3") if S3_BUCKET else None
 if s3_client:
     try:
         s3_client.head_bucket(Bucket=S3_BUCKET)
@@ -184,12 +207,12 @@ if s3_client:
         print(f"[s3] bucket '{S3_BUCKET}' not accessible: {e}")
         s3_client = None
 sm_client = (
-    boto3.client("sagemaker-runtime", region_name=AWS_REGION)
+    aws_session.client("sagemaker-runtime")
     if SAGEMAKER_ENDPOINT
     else None
 )
 sagemaker_client = (
-    boto3.client("sagemaker", region_name=AWS_REGION)
+    aws_session.client("sagemaker")
     if SAGEMAKER_ENDPOINT
     else None
 )
