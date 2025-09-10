@@ -118,16 +118,27 @@ def get_user_dirs(username: str) -> Dict[str, str]:
 
 AREA_THRESH = 1000  # pixel area below which masks are treated as "smalls"
 
-# Load BirefNet session from the shared models directory.
+# Load BirefNet ONNX model from a shared S3 bucket using ``rembg``.
 #
-# ``rembg`` looks for downloaded model weights inside the directory pointed to
-# the ``U2NET_HOME`` environment variable.  If the file already exists, it will
-# be used directly and no network call is made.  By setting ``U2NET_HOME`` to
-# our shared models directory, we ensure the pre-downloaded
-# ``birefnet-dis.onnx`` file is picked up automatically.
+# The model weights live in ``s3://sam-server-shared-1757292440/models`` and are
+# downloaded on demand into the shared models directory.  Passing the local path
+# to ``new_session`` avoids using the separate ``birefnet`` package.
 os.environ.setdefault("U2NET_HOME", MODELS_DIR)
-_REMBG_SESSION = new_session("birefnet-dis", providers=_REMBG_PROVIDERS)
-print(f"[Worker] rembg providers: {_REMBG_SESSION.get_providers()}")
+_BIRE_NET_ONNX = os.path.join(MODELS_DIR, "birefnet-dis.onnx")
+if not os.path.exists(_BIRE_NET_ONNX):
+    try:
+        s3_client.download_file(
+            "sam-server-shared-1757292440",
+            "models/birefnet-dis.onnx",
+            _BIRE_NET_ONNX,
+        )
+    except ClientError as e:  # pragma: no cover - network/permission issues
+        print(f"[s3] failed to download BirefNet model: {e}")
+
+_REMBG_SESSION = new_session(_BIRE_NET_ONNX, providers=_REMBG_PROVIDERS)
+print(
+    f"[Worker] rembg providers: {_REMBG_SESSION.inner_session.get_providers()}"
+)
 
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 os.makedirs(YOLO_MODELS_DIR, exist_ok=True)
