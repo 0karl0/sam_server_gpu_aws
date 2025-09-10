@@ -6,6 +6,8 @@ ultralytics
 flask
 gunicorn
 boto3
+# For model downloads
+requests
 #birefnet
 
 #segment-anything  # if pip-installable, else clone from github in Dockerfile
