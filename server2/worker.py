@@ -5,6 +5,7 @@ import time
 import json
 import cv2
 import gc
+import logging
 import boto3
 import numpy as np
 from typing import Dict
@@ -17,22 +18,25 @@ from segment_anything import (
     sam_model_registry,
 )
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 try:  # YOLO is optional
     from ultralytics import YOLO  # type: ignore
-    print("ultralytics loaded")
+    logger.info("ultralytics loaded")
     _YOLO_AVAILABLE = True
 except Exception:  # pragma: no cover - ultralytics may not be installed
     YOLO = None  # type: ignore
     _YOLO_AVAILABLE = False
-    print("couldn't find ultralytics")
+    logger.warning("couldn't find ultralytics")
 
 try:
     import torch  # type: ignore
-    print("importing torch")
+    logger.info("importing torch")
     _TORCH_AVAILABLE = True
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 except Exception:  # pragma: no cover - torch may not be installed
-    print("couldn't import torch")
+    logger.warning("couldn't import torch")
     torch = None  # type: ignore
     _TORCH_AVAILABLE = False
     DEVICE = "cpu"
@@ -55,15 +59,15 @@ if not S3_BUCKET:
         try:
             secret_dict = json.loads(secret_str)
             S3_BUCKET = secret_dict.get("S3_BUCKET", secret_str)
-            print(f"found {S3_BUCKET}")
+            logger.info("found %s", S3_BUCKET)
         except json.JSONDecodeError:
             S3_BUCKET = secret_str
         if S3_BUCKET.startswith("arn:aws:s3:::"):
             S3_BUCKET = S3_BUCKET.split(":::", 1)[1]
     except ClientError as e:  # pragma: no cover - network/permission issues
-        print(f"[s3] failed to retrieve bucket secret: {e}")
+        logger.error("[s3] failed to retrieve bucket secret: %s", e)
         S3_BUCKET = None
-print(f"found {S3_BUCKET}")
+logger.info("found %s", S3_BUCKET)
 
 # -------------------------
 # Config / directories
@@ -126,23 +130,29 @@ AREA_THRESH = 1000  # pixel area below which masks are treated as "smalls"
 os.environ["U2NET_HOME"] = MODELS_DIR
 _BIRE_NET_ONNX = os.path.join(MODELS_DIR, "birefnet-dis.onnx")
 if not os.path.exists(_BIRE_NET_ONNX):
-    print(f'No path found for birefnet-dis.onnx in {_BIRE_NET_ONNX}')
+    logger.info("No path found for birefnet-dis.onnx in %s", _BIRE_NET_ONNX)
     try:
         s3_client.download_file(
             "sam-server-shared-1757292440",
             "models/birefnet-dis.onnx",
             _BIRE_NET_ONNX,
         )
+        logger.info("BirefNet model downloaded to %s", _BIRE_NET_ONNX)
     except ClientError as e:  # pragma: no cover - network/permission issues
-        print(f"[s3] failed to download BirefNet model: {e}")
+        logger.error("[s3] failed to download BirefNet model: %s", e)
 
 try:
-    _REMBG_SESSION = new_session("birefnet-dis", providers="CUDAExecutionProvider")
+    _REMBG_SESSION = new_session(
+        "birefnet-dis", providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+    )
 except ValueError:
-    print("[rembg] falling back to default session")
-    _REMBG_SESSION = new_session(providers="CUDAExecutionProvider")
-print(
-    f"[Worker] rembg providers: {_REMBG_SESSION.inner_session.get_providers()}"
+    logger.warning("[rembg] falling back to default session")
+    _REMBG_SESSION = new_session(
+        providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+    )
+logger.info(
+    "[Worker] rembg providers: %s",
+    _REMBG_SESSION.inner_session.get_providers(),
 )
 
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
@@ -154,10 +164,10 @@ os.makedirs(YOLO_MODELS_DIR, exist_ok=True)
 
 def _refine_mask_with_rembg(image_bgr: np.ndarray) -> np.ndarray:
     pil_img = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
-    print("[Decision] running rembg remove")
+    logger.info("[Decision] running rembg remove")
     result = remove(pil_img, session=_REMBG_SESSION)
     alpha = np.array(result)[..., 3]
-    print("[Decision] rembg remove complete")
+    logger.info("[Decision] rembg remove complete")
     return (alpha > 0).astype(np.uint8)
 
 
@@ -168,7 +178,7 @@ def _refine_mask_with_birefnet(image_bgr: np.ndarray) -> np.ndarray:
     separate helper makes it easy to catch errors and fall back to the generic
     rembg model if needed.
     """
-    print("birefnet")
+    logger.info("birefnet")
     return _refine_mask_with_rembg(image_bgr)
 
 
@@ -178,8 +188,11 @@ def _is_line_drawing(image_bgr: np.ndarray) -> bool:
     edge_ratio = float(np.count_nonzero(edges)) / edges.size
     color_std = float(image_bgr.std())
     result = edge_ratio > 0.05 and color_std < 25.0
-    print(
-        f"[Decision] _is_line_drawing: edge_ratio={edge_ratio:.4f}, color_std={color_std:.2f} -> {result}"
+    logger.info(
+        "[Decision] _is_line_drawing: edge_ratio=%.4f, color_std=%.2f -> %s",
+        edge_ratio,
+        color_std,
+        result,
     )
     return result
 
@@ -193,7 +206,7 @@ def _has_long_lines(image_bgr: np.ndarray) -> bool:
     )
     count = 0 if lines is None else len(lines)
     result = lines is not None and count > 0
-    print(f"[Decision] _has_long_lines: count={count} -> {result}")
+    logger.info("[Decision] _has_long_lines: count=%d -> %s", count, result)
     return result
 
 
@@ -210,8 +223,11 @@ def _is_mostly_one_color(image_bgr: np.ndarray, mask: np.ndarray, std_thresh: fl
         return False
     std = float(masked_pixels.std())
     result = std < std_thresh
-    print(
-        f"[Decision] _is_mostly_one_color: std={std:.2f}, thresh={std_thresh} -> {result}"
+    logger.info(
+        "[Decision] _is_mostly_one_color: std=%.2f, thresh=%.2f -> %s",
+        std,
+        std_thresh,
+        result,
     )
     return result
 
@@ -258,11 +274,14 @@ def _get_yolo_points(image_path: str, boxes_dir: str) -> list[tuple[float, float
 
     points: list[tuple[float, float, int]] = []
     if not _YOLO_AVAILABLE:
-        print("[Worker] YOLO models not available, skipping YOLO point generation")
+        logger.info(
+            "[Worker] YOLO models not available, skipping YOLO point generation"
+        )
         return points
     if not os.path.isdir(YOLO_MODELS_DIR):
-        print(
-            f"[Worker] YOLO models directory '{YOLO_MODELS_DIR}' not found, skipping"
+        logger.warning(
+            "[Worker] YOLO models directory '%s' not found, skipping",
+            YOLO_MODELS_DIR,
         )
         return points
 
@@ -270,11 +289,11 @@ def _get_yolo_points(image_path: str, boxes_dir: str) -> list[tuple[float, float
     img = cv2.imread(image_path)
     combined = img.copy() if img is not None else None
 
-    print(f"[Worker] Running YOLO models on {image_path}")
+    logger.info("[Worker] Running YOLO models on %s", image_path)
     try:
         model_files = os.listdir(YOLO_MODELS_DIR)
     except OSError as e:
-        print(f"[Worker] cannot access {YOLO_MODELS_DIR}: {e}")
+        logger.error("[Worker] cannot access %s: %s", YOLO_MODELS_DIR, e)
         return points
     for fname in model_files:
         if not fname.lower().endswith((".pt", ".onnx")):
@@ -284,7 +303,7 @@ def _get_yolo_points(image_path: str, boxes_dir: str) -> list[tuple[float, float
         if "birefnet" in fname.lower():
             continue
         model_path = os.path.join(YOLO_MODELS_DIR, fname)
-        print(f"[Worker] Running YOLO model {fname}")
+        logger.info("[Worker] Running YOLO model %s", fname)
         try:
             model = YOLO(model_path)
             yolo_device = 0 if DEVICE == "cuda" else "cpu"
@@ -298,8 +317,14 @@ def _get_yolo_points(image_path: str, boxes_dir: str) -> list[tuple[float, float
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     cx = (x1 + x2) / 2.0
                     cy = (y1 + y2) / 2.0
-                    print(
-                        f"[Worker] {fname} detected {label} at ({x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f})"
+                    logger.info(
+                        "[Worker] %s detected %s at (%.1f, %.1f, %.1f, %.1f)",
+                        fname,
+                        label,
+                        x1,
+                        y1,
+                        x2,
+                        y2,
                     )
                     if label in {"person", "human"}:
                         points.append((cx, cy, 0))
@@ -329,14 +354,16 @@ def _get_yolo_points(image_path: str, boxes_dir: str) -> list[tuple[float, float
                 )
                 cv2.imwrite(out_file, model_img)
         except Exception as e:  # pragma: no cover - inference may fail
-            print(f"[Worker] YOLO model {fname} failed: {e}")
+            logger.error("[Worker] YOLO model %s failed: %s", fname, e)
 
     if combined is not None:
         try:
             out_file = os.path.join(boxes_dir, f"{base_name}-combined.png")
             cv2.imwrite(out_file, combined)
         except Exception as e:  # pragma: no cover - best effort only
-            print(f"[Worker] Failed to save combined boxes for {base_name}: {e}")
+            logger.error(
+                "[Worker] Failed to save combined boxes for %s: %s", base_name, e
+            )
 
     return points
 
@@ -362,7 +389,9 @@ def _save_yolo_points(
             json.dump(data, f)
         os.replace(tmp, out_path)
     except Exception as e:  # pragma: no cover - best effort only
-        print(f"[Worker] Failed to save YOLO points for {base_name}: {e}")
+        logger.error(
+            "[Worker] Failed to save YOLO points for %s: %s", base_name, e
+        )
 
 
 def load_processed_set(processed_file: str, masks_dir: str):
@@ -379,7 +408,7 @@ def load_processed_set(processed_file: str, masks_dir: str):
     try:
         mask_files = os.listdir(masks_dir)
     except OSError as e:
-        print(f"[Worker] cannot access {masks_dir}: {e}")
+        logger.error("[Worker] cannot access %s: %s", masks_dir, e)
         mask_files = []
     for fname in mask_files:
         if "_mask" in fname:
@@ -398,21 +427,24 @@ def save_processed_set(processed_set, processed_file: str):
 # -------------------------
 # Load SAM model
 # -------------------------
-_SAM_MODEL = os.path.join(MODELS_DIR, "vit_l.vth")
-if not os.path.exists(_SAM_MODEL):
-    print(f'No path found for vit_l.vth in {_SAM_MODEL}')
+if not os.path.exists(MODEL_PATH):
+    logger.info("SAM model not found at %s", MODEL_PATH)
     try:
-        print(f'downloading from sam-server-shared-xxx440 to {_SAM_MODEL}')
+        logger.info(
+            "downloading SAM model from sam-server-shared-1757292440 to %s",
+            MODEL_PATH,
+        )
         s3_client.download_file(
             "sam-server-shared-1757292440",
             "models/vit_l.pth",
-            _SAM_MODEL,
+            MODEL_PATH,
         )
+        logger.info("SAM model downloaded to %s", MODEL_PATH)
     except ClientError as e:  # pragma: no cover - network/permission issues
-        print(f"[s3] failed to download SAM model: {e}")
-mod_dir = {SHARED_DIR}+'/models'
-print(f'Files in SHARED_DIR: {mod_dir}: {os.listdir(mod_dir)}')
-print(f'Path found for vit_l.vth in {_SAM_MODEL}')
+        logger.error("[s3] failed to download SAM model: %s", e)
+else:
+    logger.info("SAM model found at %s", MODEL_PATH)
+logger.debug("Files in models dir %s: %s", MODELS_DIR, os.listdir(MODELS_DIR))
 
 sam = sam_model_registry["vit_l"](checkpoint=MODEL_PATH)
 sam.to(DEVICE)
@@ -443,7 +475,7 @@ def generate_masks(image_path, settings, points=None):
     positive point is evaluated with all negative points supplied to SAM so that
     detections such as humans can be excluded from the resulting masks.
     """
-    print("using sam")
+    logger.info("using sam")
     image = cv2.imread(image_path)
     if image is None:
         return [], None
@@ -480,7 +512,7 @@ def generate_masks(image_path, settings, points=None):
                 )
                 masks.append({"segmentation": mask[0]})
             except Exception as e:  # pragma: no cover - prediction may fail
-                print(f"[Worker] SAM point prediction failed: {e}")
+                logger.error("[Worker] SAM point prediction failed: %s", e)
 
     return masks, image
 
@@ -527,19 +559,24 @@ def process_new_images(username: str) -> int:
             if f.endswith((".png", ".jpg", ".jpeg"))
         ]
     except OSError as e:
-        print(f"[Worker] cannot access {dirs['resized']}: {e}")
+        logger.error("[Worker] cannot access %s: %s", dirs["resized"], e)
         files = []
     new_files = [f for f in files if os.path.splitext(f)[0] not in processed]
     if not new_files:
-        print(f"[Worker] No new files found for {username}")
+        logger.info("[Worker] No new files found for %s", username)
         return 0
-    print(f"[Worker] Found {len(new_files)} new file(s) for {username}: {new_files}")
+    logger.info(
+        "[Worker] Found %d new file(s) for %s: %s",
+        len(new_files),
+        username,
+        new_files,
+    )
     count = 0
     for f in new_files:
         base = os.path.splitext(f)[0]
         file_path = os.path.join(dirs["resized"], f)
         start = time.process_time()
-        print(f"[Worker] Processing {f} for {username} ...")
+        logger.info("[Worker] Processing %s for %s ...", f, username)
         try:
             img = cv2.imread(file_path)
             if img is None:
@@ -547,7 +584,7 @@ def process_new_images(username: str) -> int:
             simple = _is_line_drawing(img) or _has_long_lines(img)
             yolo_points = [] if simple else _get_yolo_points(file_path, dirs["boxes"])
             if simple or not yolo_points:
-                print("[Worker] Using BirefNet for segmentation")
+                logger.info("[Worker] Using BirefNet for segmentation")
                 mask = _refine_mask_with_birefnet(img)
                 crops = _crop_with_mask(img, mask)
                 mask_file = os.path.join(dirs["masks"], f"{base}_mask0.png")
@@ -556,7 +593,7 @@ def process_new_images(username: str) -> int:
                     crop_file = os.path.join(dirs["crops"], f"{base}_mask0_{idx}.png")
                     cv2.imwrite(crop_file, crop)
             else:
-                print("[Worker] Using SAM for segmentation")
+                logger.info("[Worker] Using SAM for segmentation")
                 masks, img = generate_masks(file_path, settings, yolo_points)
                 if img is not None and yolo_points:
                     h, w = img.shape[:2]
@@ -568,10 +605,10 @@ def process_new_images(username: str) -> int:
                     )
                     if _is_mostly_one_color(img, largest["segmentation"]):
                         try:
-                            print("refining with birefnet")
+                            logger.info("refining with birefnet")
                             largest["segmentation"] = _refine_mask_with_birefnet(img).astype(bool)
                         except Exception:
-                            print("refining with rembg")
+                            logger.info("refining with rembg")
                             largest["segmentation"] = _refine_mask_with_rembg(img).astype(bool)
                     h, w = img.shape[:2]
                     total_pixels = h * w
@@ -597,16 +634,16 @@ def process_new_images(username: str) -> int:
             gc.collect()
             end = time.process_time()
             total = end - start
-            print(f"elapsed time: {total:.6f} seconds")
+            logger.info("elapsed time: %.6f seconds", total)
         except Exception as e:
-            print(f"[Worker] Error processing {f}: {e}")
+            logger.error("[Worker] Error processing %s: %s", f, e)
     save_processed_set(processed, dirs["processed"])
     return count
 
 
 def main() -> None:
-    mod_dir = {SHARED_DIR}+'/models'
-    print(f'Files in SHARED_DIR: {mod_dir}: {os.listdir(mod_dir)}')
+    mod_dir = os.path.join(SHARED_DIR, "models")
+    logger.info("Files in SHARED_DIR %s: %s", mod_dir, os.listdir(mod_dir))
     while True:
         try:
             users = [
@@ -615,11 +652,11 @@ def main() -> None:
                 if os.path.isdir(os.path.join(SHARED_DIR, d)) and d != "models"
             ]
         except OSError as e:
-            print(f"[Worker] cannot list users in {SHARED_DIR}: {e}")
+            logger.error("[Worker] cannot list users in %s: %s", SHARED_DIR, e)
             users = []
         total_processed = 0
         for user in users:
-            print(f'looking at user: {user}')
+            logger.info("looking at user: %s", user)
             total_processed += process_new_images(user)
         if total_processed == 0:
             time.sleep(5)
