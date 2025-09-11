@@ -489,39 +489,36 @@ def run_sagemaker_job(stem: str, username: str) -> None:
     if job_key in _processing_jobs:
         return
     _processing_jobs.add(job_key)
+    if not (SAGEMAKER_ENDPOINT and S3_BUCKET and s3_client and sm_client):
+        return
+    print(f"[sagemaker] starting job for user {username} and file {stem}.png")
+    input_key = f"{username}/resized/{stem}.png"
+    output_prefix = f"{username}/output/masks/"
     try:
-        if not (SAGEMAKER_ENDPOINT and S3_BUCKET and s3_client and sm_client):
-            return
-        print(f"[sagemaker] starting job for user {username} and file {stem}.png")
-        input_key = f"{username}/resized/{stem}.png"
-        output_prefix = f"{username}/output/"
-        try:
-            s3_client.head_object(Bucket=S3_BUCKET, Key=input_key)
-        except Exception as e:
-            print(f"[sagemaker] resized image missing: {e}")
-            return
+        s3_client.head_object(Bucket=S3_BUCKET, Key=input_key)
+    except Exception as e:
+        print(f"[sagemaker] resized image missing: {e}")
+        return
 
-        payload = {"s3": f"s3://{S3_BUCKET}/{input_key}", "output": f"s3://{S3_BUCKET}/{output_prefix}"}
-        try:
-            print(f"[sagemaker] invoking endpoint {SAGEMAKER_ENDPOINT} with payload {payload}")
-            response = sm_client.invoke_endpoint(
-                EndpointName=SAGEMAKER_ENDPOINT,
-                ContentType="application/json",
-                Body=json.dumps(payload),
-            )
-            status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-            if status != 200:
-                body = response.get("Body")
-                body_text = body.read().decode() if body else ""
-                print(f"[sagemaker] invoke returned {status}: {body_text}")
-            else:
-                print(f"[sagemaker] server2 acknowledged request with status {status}")
-        except Exception as e:
-            print(f"[sagemaker] invoke failed: {e}")
-            return
-        print(f"[sagemaker] job launched for {stem}")
-    finally:
-        _processing_jobs.discard(job_key)
+    payload = {"s3": f"s3://{S3_BUCKET}/{input_key}", "output": f"s3://{S3_BUCKET}/{output_prefix}"}
+    try:
+        print(f"[sagemaker] invoking endpoint {SAGEMAKER_ENDPOINT} with payload {payload}")
+        response = sm_client.invoke_endpoint(
+            EndpointName=SAGEMAKER_ENDPOINT,
+            ContentType="application/json",
+            Body=json.dumps(payload),
+        )
+        status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if status != 200:
+            body = response.get("Body")
+            body_text = body.read().decode() if body else ""
+            print(f"[sagemaker] invoke returned {status}: {body_text}")
+        else:
+            print(f"[sagemaker] server2 acknowledged request with status {status}")
+    except Exception as e:
+        print(f"[sagemaker] invoke failed: {e}")
+        return
+    print(f"[sagemaker] job launched for {stem}")
 
 # -------------------------
 # Authentication
@@ -791,39 +788,42 @@ def process_mask_file(mask_key: str, username: str):
     except Exception:
         return
 
-    orig_bytes = orig_obj["Body"].read()
-    mask_bytes = mask_obj["Body"].read()
-    orig_bgr = cv2.imdecode(np.frombuffer(orig_bytes, np.uint8), cv2.IMREAD_COLOR)
-    mask_gray = cv2.imdecode(np.frombuffer(mask_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
-    if orig_bgr is None or mask_gray is None:
-        return
+    try:
+        orig_bytes = orig_obj["Body"].read()
+        mask_bytes = mask_obj["Body"].read()
+        orig_bgr = cv2.imdecode(np.frombuffer(orig_bytes, np.uint8), cv2.IMREAD_COLOR)
+        mask_gray = cv2.imdecode(np.frombuffer(mask_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
+        if orig_bgr is None or mask_gray is None:
+            return
 
-    crops = make_rgba_crops(orig_bgr, mask_gray)
-    if not crops:
-        return
+        crops = make_rgba_crops(orig_bgr, mask_gray)
+        if not crops:
+            return
 
-    index = load_crops_index(username)
-    crops_for_original = index.get(f"{base}.png", [])
-    for idx, crop_rgba in enumerate(crops):
-        out_name = fname[:-4] + f"_{idx}.png"
-        _, buf = cv2.imencode(".png", crop_rgba)
-        crop_key = f"{username}/output/crops/{out_name}"
-        s3_client.put_object(Bucket=S3_BUCKET, Key=crop_key, Body=buf.tobytes())
+        index = load_crops_index(username)
+        crops_for_original = index.get(f"{base}.png", [])
+        for idx, crop_rgba in enumerate(crops):
+            out_name = fname[:-4] + f"_{idx}.png"
+            _, buf = cv2.imencode(".png", crop_rgba)
+            crop_key = f"{username}/output/crops/{out_name}"
+            s3_client.put_object(Bucket=S3_BUCKET, Key=crop_key, Body=buf.tobytes())
 
-        try:
-            pil_crop = Image.fromarray(cv2.cvtColor(crop_rgba, cv2.COLOR_BGRA2RGBA))
-            thumb_bytes = normalize_to_png_bytes(pil_crop, longest_side=256)
-            thumb_key = f"{username}/output/thumbs/{out_name}"
-            s3_client.put_object(Bucket=S3_BUCKET, Key=thumb_key, Body=thumb_bytes)
-        except Exception:
-            pass
+            try:
+                pil_crop = Image.fromarray(cv2.cvtColor(crop_rgba, cv2.COLOR_BGRA2RGBA))
+                thumb_bytes = normalize_to_png_bytes(pil_crop, longest_side=256)
+                thumb_key = f"{username}/output/thumbs/{out_name}"
+                s3_client.put_object(Bucket=S3_BUCKET, Key=thumb_key, Body=thumb_bytes)
+            except Exception:
+                pass
 
-        if out_name not in crops_for_original:
-            crops_for_original.append(out_name)
+            if out_name not in crops_for_original:
+                crops_for_original.append(out_name)
 
-    index[f"{base}.png"] = crops_for_original
-    save_crops_index(index, username)
-    _mark_processed(base, username)
+        index[f"{base}.png"] = crops_for_original
+        save_crops_index(index, username)
+        _mark_processed(base, username)
+    finally:
+        _processing_jobs.discard((username, base))
 
 def resized_watcher_loop():
     while True:
