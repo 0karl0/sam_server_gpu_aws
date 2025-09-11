@@ -3,7 +3,6 @@ import json
 import threading
 import time
 from typing import List, Dict
-import shutil
 import io
 import boto3
 from botocore.exceptions import ClientError
@@ -34,29 +33,22 @@ import pillow_heif  # enables HEIC/HEIF decode in Pillow
 # filesystem.
 SHARED_DIR   = os.getenv("SHARED_DIR", "/mnt/s3")
 
-# User-specific settings are stored locally; images live exclusively in S3.
-USER_BASE    = os.path.join(SHARED_DIR, "shared")
-CONFIG_DIR   = os.path.join(USER_BASE, "config")
-SETTINGS_JSON = os.path.join(CONFIG_DIR, "settings.json")
-MODELS_DIR   = os.path.join(SHARED_DIR, "models")              # downloaded weights
+# Images and user data live in S3; only model weights are cached locally.
+MODELS_DIR   = os.path.join(SHARED_DIR, "models")  # downloaded weights
+SETTINGS_KEY = "shared/config/settings.json"  # default S3 location for settings
 
 MAX_RESIZE = 1024  # longest side for SAM
 ALLOWED_EXT = {"png", "jpg", "jpeg", "webp", "bmp", "tiff", "heic", "heif"}
 
-# Only the models directory is truly shared across users and can be created at
-# import time. User-specific directories are created on demand in
-# ``set_user_dirs``.
+# Only the models directory is needed locally and can be created at import time.
 os.makedirs(MODELS_DIR, exist_ok=True)
 
-# Helper to configure per-user directory paths. This updates module-level
-# variables so existing code can continue to reference them.
+# Helper to configure per-user S3 paths. This updates module-level variables so
+# existing code can continue to reference them.
 def set_user_dirs(username: str) -> None:
-    global CONFIG_DIR, SETTINGS_JSON
+    global SETTINGS_KEY
 
-    base = os.path.join(SHARED_DIR, username)
-    CONFIG_DIR = os.path.join(base, "config")
-    SETTINGS_JSON = os.path.join(CONFIG_DIR, "settings.json")
-    os.makedirs(CONFIG_DIR, exist_ok=True)
+    SETTINGS_KEY = f"{username}/config/settings.json"
 
     if s3_client and S3_BUCKET:
         prefixes = [
@@ -418,17 +410,17 @@ def ensure_settings_defaults() -> dict:
         "stability_score_thresh": 0.95,
         "crop_n_layers": 1
     }
-    if os.path.exists(SETTINGS_JSON):
+    if s3_client and S3_BUCKET:
         try:
-            with open(SETTINGS_JSON, "r") as f:
-                data = json.load(f)
+            obj = s3_client.get_object(Bucket=S3_BUCKET, Key=SETTINGS_KEY)
+            data = json.loads(obj["Body"].read())
             defaults.update({k: data.get(k, v) for k, v in defaults.items()})
         except Exception:
-            pass
-    else:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(SETTINGS_JSON, "w") as f:
-            json.dump(defaults, f, indent=2)
+            s3_client.put_object(
+                Bucket=S3_BUCKET,
+                Key=SETTINGS_KEY,
+                Body=json.dumps(defaults, indent=2),
+            )
     return defaults
 
 def make_rgba_crops(original_bgr: np.ndarray, mask_gray: np.ndarray) -> List[np.ndarray]:
@@ -708,8 +700,12 @@ def save_settings():
         "stability_score_thresh": float(data.get("stability_score_thresh", current["stability_score_thresh"])),
         "crop_n_layers": int(data.get("crop_n_layers", current["crop_n_layers"])),
     })
-    with open(SETTINGS_JSON, "w") as f:
-        json.dump(current, f, indent=2)
+    if s3_client and S3_BUCKET:
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=SETTINGS_KEY,
+            Body=json.dumps(current, indent=2),
+        )
     return jsonify({"status": "ok", "settings": current})
 
 @app.route("/get_settings", methods=["GET"])
