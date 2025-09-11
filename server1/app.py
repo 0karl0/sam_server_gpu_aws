@@ -4,6 +4,7 @@ import threading
 import time
 from typing import List, Dict
 import io
+import queue
 import boto3
 from botocore.exceptions import ClientError
 
@@ -15,6 +16,7 @@ from flask import (
     redirect,
     url_for,
     session,
+    Response,
 )
 from werkzeug.utils import secure_filename
 import requests
@@ -73,6 +75,34 @@ pillow_heif.register_heif_opener()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "change-me")
+
+album_update_subscribers: List[queue.Queue] = []
+
+def notify_album_update() -> None:
+    """Push a notification to all SSE subscribers."""
+    for q in list(album_update_subscribers):
+        try:
+            q.put_nowait("refresh")
+        except Exception:
+            pass
+
+
+@app.route("/album_stream")
+def album_stream() -> Response:
+    """Server-sent events stream for album updates."""
+
+    def gen():
+        q: queue.Queue = queue.Queue()
+        album_update_subscribers.append(q)
+        try:
+            while True:
+                data = q.get()
+                yield f"data: {data}\n\n"
+        finally:
+            album_update_subscribers.remove(q)
+
+    return Response(gen(), mimetype="text/event-stream")
+
 
 def get_single_secret_value(secret_name):
     session = boto3.session.Session()
@@ -832,6 +862,7 @@ def process_mask_file(mask_key: str, username: str):
         index[f"{base}.png"] = crops_for_original
         save_crops_index(index, username)
         _mark_processed(base, username)
+        notify_album_update()
     finally:
         _processing_jobs.discard((username, base))
 
