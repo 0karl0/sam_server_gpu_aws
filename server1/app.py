@@ -943,7 +943,7 @@ def resized_watcher_loop():
     while True:
         try:
             try:
-                users = os.listdir(USER_BASE)
+                users = os.listdir(SHARED_DIR)
             except OSError as e:
                 print(f"[resized_watcher] cannot access {SHARED_DIR}: {e}")
                 time.sleep(0.5)
@@ -967,8 +967,8 @@ def resized_watcher_loop():
                     print(f"[resized_watcher] cannot access {resized_dir}: {e}")
                     continue
                 for fname in files:
-                    print(f'found {fname} and launching a thread with run_sagemaker_job using arguments {stem} and {user}')
                     stem, _ = os.path.splitext(fname)
+                    print(f'found {fname} and launching a thread with run_sagemaker_job using arguments {stem} and {user}')
                     key = (user, stem)
                     if stem in processed or key in _processing_jobs:
                         continue
