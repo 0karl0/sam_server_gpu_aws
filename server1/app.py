@@ -825,6 +825,8 @@ def resized_watcher_loop():
     while True:
         try:
             if not (s3_client and S3_BUCKET):
+            try:
+
                 time.sleep(0.5)
                 continue
             resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Delimiter="/")
@@ -844,7 +846,9 @@ def resized_watcher_loop():
                     fname = os.path.basename(item["Key"])
                     if not fname.lower().endswith(".png"):
                         continue
+
                     stem, _ = os.path.splitext(fname)
+                    print(f'found {fname} and launching a thread with run_sagemaker_job using arguments {stem} and {user}')
                     key = (user, stem)
                     if stem in processed or key in _processing_jobs:
                         continue
