@@ -259,7 +259,7 @@ def notify_sagemaker_startup() -> None:
         print(f"[sagemaker] startup notification failed: {e}")
 
 
-notify_sagemaker_startup()
+#notify_sagemaker_startup()
 
 
 # -------------------------
