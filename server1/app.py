@@ -793,14 +793,29 @@ def list_crops():
 
 
 def _delete_user_s3_data(username: str) -> None:
-    """Delete all S3 objects belonging to ``username``."""
+    """Delete all S3 objects belonging to ``username`` while preserving folders."""
+
     if not (s3_client and S3_BUCKET):
         return
+
     paginator = s3_client.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"{username}/"):
-        objs = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+        objs = []
+        for obj in page.get("Contents", []):
+            key = obj.get("Key", "")
+            # Keys ending with "/" represent the placeholder objects that mimic
+            # folder structures in S3. Keep those so subsequent uploads do not
+            # need to recreate the directory tree.
+            if key.endswith("/"):
+                continue
+            objs.append({"Key": key})
+
         if objs:
             s3_client.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": objs})
+
+    # Ensure the expected directory prefixes still exist after the purge.
+    # ``set_user_dirs`` creates empty objects for each required prefix.
+    set_user_dirs(username)
 
 
 @app.route("/clear_all", methods=["POST"])
@@ -809,6 +824,7 @@ def clear_all():
     username = session.get("user", "shared")
     _delete_user_s3_data(username)
     _processed_mask_files.clear()
+    notify_album_update()
     return jsonify({"status": "cleared"})
 
 # -------------------------

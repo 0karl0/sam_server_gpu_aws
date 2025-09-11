@@ -122,7 +122,7 @@
         </details>
 
         <button class="btn ghost" id="toggleGallery">Hide Originals & Clippings</button>
-        <button class="btn ghost" id="clearProcessed">Clear Processed</button>
+        <button class="btn ghost" id="clearAll">Clear</button>
 
       </div>
     </header>
@@ -234,10 +234,10 @@
         fd.append("file", file, file.name);
         const res = await fetch("/upload",{method:"POST", body:fd, headers:{Accept:"application/json"}});
         if(!res.ok){ console.error("Upload failed for", file.name); }
-        await refreshAlbums();
       }
       uploading = false;
       updateQueueStatus();
+      await refreshAlbums();
     }
 
     document.getElementById("uploadForm").addEventListener("submit", (e)=>{
@@ -268,7 +268,7 @@
 
     });
 
-    const clearBtn = document.getElementById("clearProcessed");
+    const clearBtn = document.getElementById("clearAll");
     clearBtn.addEventListener("click", async ()=>{
       if(!confirm("Delete all processed images?")) return;
       await fetch("/clear_all", {method:"POST"});
@@ -276,7 +276,7 @@
       layer.destroyChildren();
       layer.add(tr);
       layer.batchDraw();
-      await refreshAlbums();
+      document.getElementById("albums").innerHTML = "";
     });
 
     // ---------- albums (originals + crops) ----------
@@ -347,8 +347,12 @@
         }else{
           a.crops.forEach(c=>{
             const chip=document.createElement("div"); chip.className="chip";
-            const img=document.createElement("img"); img.src=c.thumb_url; img.alt=c.file; img.title="Add to canvas";
-            img.onclick=()=> addToCanvas(c.url);
+            const img=document.createElement("img");
+            img.src = c.thumb_url;
+            img.alt = c.file;
+            img.title = "Add to canvas";
+            // c.url points to the full-resolution clip; add it to the canvas when clicked
+            img.onclick = () => addToCanvas(c.url);
             chip.appendChild(img); chips.appendChild(chip);
           });
         }
