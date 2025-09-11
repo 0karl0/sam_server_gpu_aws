@@ -558,13 +558,23 @@ def run_sagemaker_job(stem: str, username: str) -> None:
         # subdirectory and the subsequent download failing.  Supply only the
         # prefix and download the expected mask file explicitly.
         output_prefix = f"{username}/output/"
-        try:
-            print(f"[sagemaker] uploading {resized_path} to s3://{S3_BUCKET}/{input_key}")
-            s3_client.upload_file(resized_path, S3_BUCKET, input_key)
-            print("[sagemaker] upload complete; invoking server2")
-        except Exception as e:
-            print(f"[sagemaker] upload failed: {e}")
-            return
+
+        if os.path.exists(resized_path):
+            try:
+                print(f"[sagemaker] uploading {resized_path} to s3://{S3_BUCKET}/{input_key}")
+                s3_client.upload_file(resized_path, S3_BUCKET, input_key)
+                print("[sagemaker] upload complete; invoking server2")
+            except Exception as e:
+                print(f"[sagemaker] upload failed: {e}")
+                return
+        else:
+            try:
+                s3_client.head_object(Bucket=S3_BUCKET, Key=input_key)
+                print(f"[sagemaker] using existing s3://{S3_BUCKET}/{input_key}")
+            except Exception as e:
+                print(f"[sagemaker] resized image missing: {e}")
+                return
+
         payload = {"s3": f"s3://{S3_BUCKET}/{input_key}", "output": f"s3://{S3_BUCKET}/{output_prefix}"}
         try:
             print(f"[sagemaker] invoking endpoint {SAGEMAKER_ENDPOINT} with payload {payload}")
@@ -689,6 +699,13 @@ def upload():
     # Also save a resized (≤1024) copy for SAM in /resized (same basename)
     resized_png = os.path.join(RESIZED_DIR, f"{stem}.png")
     normalize_to_png_and_save(pil_img, resized_png, longest_side=MAX_RESIZE)
+    if s3_client and S3_BUCKET:
+        try:
+            s3_resized_key = f"{username}/resized/{stem}.png"
+            s3_client.upload_file(resized_png, S3_BUCKET, s3_resized_key)
+            print(f"[upload] uploaded resized to s3://{S3_BUCKET}/{s3_resized_key}")
+        except Exception as e:
+            print(f"[upload] failed to upload resized: {e}")
 
     # Save a smaller thumbnail for quick listing in /thumbs
     thumb_png = os.path.join(THUMBS_DIR, f"{stem}.png")
