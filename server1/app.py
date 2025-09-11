@@ -39,6 +39,7 @@ SETTINGS_KEY = "shared/config/settings.json"  # default S3 location for settings
 
 MAX_RESIZE = 1024  # longest side for SAM
 ALLOWED_EXT = {"png", "jpg", "jpeg", "webp", "bmp", "tiff", "heic", "heif"}
+MAX_CROPS_PER_IMAGE = 5  # limit crops returned per original
 
 # Only the models directory is needed locally and can be created at import time.
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -663,9 +664,16 @@ def list_originals():
         crop_files = index.get(f, [])
         crops = []
         for c in crop_files:
+            crop_key = f"{username}/output/crops/{c}"
+            area = 0
+            try:
+                head = s3_client.head_object(Bucket=S3_BUCKET, Key=crop_key)
+                area = head.get("ContentLength", 0)
+            except Exception:
+                pass
             crop_url = s3_client.generate_presigned_url(
                 "get_object",
-                Params={"Bucket": S3_BUCKET, "Key": f"{username}/output/crops/{c}"},
+                Params={"Bucket": S3_BUCKET, "Key": crop_key},
                 ExpiresIn=3600,
             )
             thumb_url = s3_client.generate_presigned_url(
@@ -673,7 +681,9 @@ def list_originals():
                 Params={"Bucket": S3_BUCKET, "Key": f"{username}/output/thumbs/{c}"},
                 ExpiresIn=3600,
             )
-            crops.append({"file": c, "url": crop_url, "thumb_url": thumb_url})
+            crops.append({"file": c, "url": crop_url, "thumb_url": thumb_url, "area": area})
+        crops.sort(key=lambda x: x.get("area", 0), reverse=True)
+        crops = crops[:MAX_CROPS_PER_IMAGE]
         orig_url = s3_client.generate_presigned_url(
             "get_object",
             Params={"Bucket": S3_BUCKET, "Key": f"{username}/input/{f}"},
