@@ -362,9 +362,14 @@
       autoAddBiggestCrops(albums);
     }
 
-    // initial + polling (debounced while interacting)
+    // Initial load of albums and subscribe to server-sent events for updates
     refreshAlbums();
-    setInterval(()=>{ if(Date.now()-lastUserAction>1200) refreshAlbums(); }, 2000);
+    const albumEvents = new EventSource("/album_stream");
+    albumEvents.onmessage = () => {
+      if (Date.now() - lastUserAction > 1200) {
+        refreshAlbums();
+      }
+    };
 
    // ---------- Konva stage ----------
   const container = document.getElementById("canvasContainer");
