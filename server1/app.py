@@ -825,8 +825,6 @@ def resized_watcher_loop():
     while True:
         try:
             if not (s3_client and S3_BUCKET):
-            try:
-
                 time.sleep(0.5)
                 continue
             resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Delimiter="/")
