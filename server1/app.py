@@ -180,6 +180,8 @@ if s3_client:
     try:
         s3_client.head_bucket(Bucket=S3_BUCKET)
         print(f"[s3] bucket '{S3_BUCKET}' accessible")
+        # ensure shared models prefix exists so weights are stored on S3
+        s3_client.put_object(Bucket=S3_BUCKET, Key="models/")
     except Exception as e:
         print(f"[s3] bucket '{S3_BUCKET}' not accessible: {e}")
         s3_client = None
@@ -234,8 +236,25 @@ def ensure_models() -> None:
         "yolov8n-seg.pt": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n-seg.pt",
     }
     for fname, url in models.items():
-        print(f'Downloading {fname}')
-        _download_file(url, os.path.join(MODELS_DIR, fname))
+        local_path = os.path.join(MODELS_DIR, fname)
+        s3_key = f"models/{fname}"
+        if s3_client and S3_BUCKET:
+            try:
+                s3_client.head_object(Bucket=S3_BUCKET, Key=s3_key)
+                if not os.path.exists(local_path):
+                    s3_client.download_file(S3_BUCKET, s3_key, local_path)
+                    print(f"Downloaded {fname} from S3")
+                    continue
+            except ClientError:
+                pass
+        if not os.path.exists(local_path):
+            print(f"Downloading {fname}")
+            _download_file(url, local_path)
+            if s3_client and S3_BUCKET:
+                try:
+                    s3_client.upload_file(local_path, S3_BUCKET, s3_key)
+                except Exception as e:  # pragma: no cover - best effort
+                    print(f"[s3] upload failed for {fname}: {e}")
 
 
 if ENABLE_MODEL_DOWNLOADS:

@@ -77,9 +77,26 @@ logger.info("found %s", S3_BUCKET)
 SHARED_DIR = os.getenv("SHARED_DIR", "/tmp/shared")
 os.makedirs(SHARED_DIR, exist_ok=True)
 
+s3_client = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
+
 # All models are shared across users and live in a common directory.
 MODELS_DIR = os.path.join(SHARED_DIR, "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
+if s3_client and S3_BUCKET:
+    try:
+        s3_client.put_object(Bucket=S3_BUCKET, Key="models/")
+    except Exception as e:  # pragma: no cover - best effort
+        print(f"[s3] ensure models prefix failed: {e}")
+    required = ["vit_l.pth", "birefnet-dis.onnx", "yolov8n.pt", "yolov8n-seg.pt"]
+    for fname in required:
+        local_path = os.path.join(MODELS_DIR, fname)
+        if not os.path.exists(local_path):
+            s3_key = f"models/{fname}"
+            try:
+                s3_client.download_file(S3_BUCKET, s3_key, local_path)
+                print(f"[s3] downloaded {s3_key} to {local_path}")
+            except Exception as e:  # pragma: no cover - best effort
+                print(f"[s3] failed to download {s3_key}: {e}")
 MODEL_PATH = os.path.join(MODELS_DIR, "vit_l.pth")
 YOLO_MODELS_DIR = MODELS_DIR
 
