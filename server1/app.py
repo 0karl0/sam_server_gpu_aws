@@ -860,7 +860,7 @@ def resized_watcher_loop():
                         continue
 
                     stem, _ = os.path.splitext(fname)
-                    print(f'found {fname} and launching a thread with run_sagemaker_job using arguments {stem} and {user}')
+                    #print(f'found {fname} and launching a thread with run_sagemaker_job using arguments {stem} and {user}')
                     key = (user, stem)
                     if stem in processed or key in _processing_jobs:
                         continue
