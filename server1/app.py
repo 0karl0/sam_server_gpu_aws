@@ -943,7 +943,7 @@ def resized_watcher_loop():
     while True:
         try:
             try:
-                users = os.listdir(SHARED_DIR)
+                users = os.listdir(USER_BASE)
             except OSError as e:
                 print(f"[resized_watcher] cannot access {SHARED_DIR}: {e}")
                 time.sleep(0.5)
