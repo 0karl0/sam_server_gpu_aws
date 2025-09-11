@@ -813,6 +813,15 @@ def _delete_user_s3_data(username: str) -> None:
         if objs:
             s3_client.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": objs})
 
+    # Some workflows cache processing state in ``output/processed.json``.  The
+    # above bulk-deletion should remove it, but delete explicitly to avoid stale
+    # entries reappearing if the list call missed it for any reason.
+    proc_key = f"{username}/output/processed.json"
+    try:  # best effort – failure here shouldn't block clearing other files
+        s3_client.delete_object(Bucket=S3_BUCKET, Key=proc_key)
+    except Exception:
+        pass
+
     # Ensure the expected directory prefixes still exist after the purge.
     # ``set_user_dirs`` creates empty objects for each required prefix.
     set_user_dirs(username)

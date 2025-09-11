@@ -276,7 +276,9 @@
       layer.destroyChildren();
       layer.add(tr);
       layer.batchDraw();
+      selectNode(null);
       document.getElementById("albums").innerHTML = "";
+      await refreshAlbums();
     });
 
     // ---------- albums (originals + crops) ----------
@@ -352,7 +354,7 @@
             img.alt = c.file;
             img.title = "Add to canvas";
             // c.url points to the full-resolution clip; add it to the canvas when clicked
-            img.onclick = () => addToCanvas(c.url);
+            img.addEventListener("click", () => addToCanvas(c.url));
             chip.appendChild(img); chips.appendChild(chip);
           });
         }
