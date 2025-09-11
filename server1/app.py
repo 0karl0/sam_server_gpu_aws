@@ -154,7 +154,7 @@ print("getting sage")
 secret = get_single_secret_value("sagemaker-endpoint") #os.getenv("SAGEMAKER_ENDPOINT","sam-server2-endpoint")
 
 SAGEMAKER_ENDPOINT =secret["SecretString"]
-
+print(f'sagemaker_endpoint: {SAGEMAKER_ENDPOINT}')
 SAGEMAKER_VARIANT = os.getenv("SAGEMAKER_VARIANT", "AllTraffic")
 print("getting s3")
 secret = get_single_secret_value("s3bucket")
@@ -183,16 +183,22 @@ if s3_client:
     except Exception as e:
         print(f"[s3] bucket '{S3_BUCKET}' not accessible: {e}")
         s3_client = None
+
 sm_client = (
     boto3.client("sagemaker-runtime", region_name=AWS_REGION)
     if SAGEMAKER_ENDPOINT
     else None
 )
+
+print(f'sm_client: {sm_client}')
+
 sagemaker_client = (
     boto3.client("sagemaker", region_name=AWS_REGION)
     if SAGEMAKER_ENDPOINT
     else None
 )
+
+print(f'sagemaker_client: {sagemaker_client}')
 
 # Track which mask files have been processed into crops
 _processed_mask_files = set()
