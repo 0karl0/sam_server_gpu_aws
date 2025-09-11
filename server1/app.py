@@ -4,6 +4,7 @@ import threading
 import time
 from typing import List, Dict
 import shutil
+import io
 import boto3
 from botocore.exceptions import ClientError
 
@@ -12,7 +13,6 @@ from flask import (
     render_template,
     request,
     jsonify,
-    send_from_directory,
     redirect,
     url_for,
     session,
@@ -34,21 +34,10 @@ import pillow_heif  # enables HEIC/HEIF decode in Pillow
 # filesystem.
 SHARED_DIR   = os.getenv("SHARED_DIR", "/mnt/s3")
 
-# Paths that depend on the logged-in user. They are initialized for a generic
-# "shared" user but are reconfigured for each user in ``set_user_dirs``.
+# User-specific settings are stored locally; images live exclusively in S3.
 USER_BASE    = os.path.join(SHARED_DIR, "shared")
-UPLOADS_DIR  = os.path.join(USER_BASE, "uploads")             # raw uploaded files
-INPUT_DIR    = os.path.join(USER_BASE, "input")              # originals (PNG-normalized)
-RESIZED_DIR  = os.path.join(USER_BASE, "resized")            # ≤1024 for SAM
-MASKS_DIR    = os.path.join(USER_BASE, "output", "masks")    # from Server2
-CROPS_DIR    = os.path.join(USER_BASE, "output", "crops")    # RGBA crops
-SMALLS_DIR   = os.path.join(USER_BASE, "output", "smalls")
-POINTS_DIR   = os.path.join(USER_BASE, "output", "points")
-PROCESSED_FILE = os.path.join(USER_BASE, "output", "processed.json")
 CONFIG_DIR   = os.path.join(USER_BASE, "config")
 SETTINGS_JSON = os.path.join(CONFIG_DIR, "settings.json")
-CROPS_INDEX   = os.path.join(CROPS_DIR, "index.json")         # manifest linking crops to original
-THUMBS_DIR   = os.path.join(USER_BASE, "output", "thumbs")   # thumbnails for UI
 MODELS_DIR   = os.path.join(SHARED_DIR, "models")              # downloaded weights
 
 MAX_RESIZE = 1024  # longest side for SAM
@@ -62,27 +51,12 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 # Helper to configure per-user directory paths. This updates module-level
 # variables so existing code can continue to reference them.
 def set_user_dirs(username: str) -> None:
-    global UPLOADS_DIR, INPUT_DIR, RESIZED_DIR, MASKS_DIR, CROPS_DIR, SMALLS_DIR
-    global THUMBS_DIR, CONFIG_DIR, POINTS_DIR, PROCESSED_FILE
-    global SETTINGS_JSON, CROPS_INDEX
+    global CONFIG_DIR, SETTINGS_JSON
 
     base = os.path.join(SHARED_DIR, username)
-    UPLOADS_DIR = os.path.join(base, "uploads")
-    INPUT_DIR = os.path.join(base, "input")
-    RESIZED_DIR = os.path.join(base, "resized")
-    MASKS_DIR = os.path.join(base, "output", "masks")
-    CROPS_DIR = os.path.join(base, "output", "crops")
-    SMALLS_DIR = os.path.join(base, "output", "smalls")
-    THUMBS_DIR = os.path.join(base, "output", "thumbs")
-    POINTS_DIR = os.path.join(base, "output", "points")
     CONFIG_DIR = os.path.join(base, "config")
-    PROCESSED_FILE = os.path.join(base, "output", "processed.json")
     SETTINGS_JSON = os.path.join(CONFIG_DIR, "settings.json")
-    CROPS_INDEX = os.path.join(CROPS_DIR, "index.json")
-
-    for d in [UPLOADS_DIR, INPUT_DIR, RESIZED_DIR, MASKS_DIR, CROPS_DIR,
-              SMALLS_DIR, THUMBS_DIR, CONFIG_DIR, POINTS_DIR]:
-        os.makedirs(d, exist_ok=True)
+    os.makedirs(CONFIG_DIR, exist_ok=True)
 
     if s3_client and S3_BUCKET:
         prefixes = [
@@ -304,61 +278,27 @@ def stop_gpu_instance() -> None:
         print(f"Failed to scale endpoint: {e}")
 
 
-def _ensure_resized_from_input(user: str) -> None:
-    """Generate /resized copies for any originals in /input missing them."""
-    input_dir = os.path.join(SHARED_DIR, user, "input")
-    if not os.path.isdir(input_dir):
-        return
-    resized_dir = os.path.join(SHARED_DIR, user, "resized")
-    try:
-        files = [f for f in os.listdir(input_dir)
-                 if f.rsplit(".", 1)[-1].lower() in ALLOWED_EXT]
-    except OSError as e:
-        print(f"[_ensure_resized_from_input] cannot access {input_dir}: {e}")
-        return
-    for f in files:
-        stem, _ = os.path.splitext(f)
-        dst = os.path.join(resized_dir, f"{stem}.png")
-        if os.path.exists(dst):
-            continue
-        src = os.path.join(input_dir, f)
-        try:
-            img = Image.open(src)
-        except Exception as e:  # pragma: no cover - best effort
-            print(f"[_ensure_resized_from_input] failed to open {src}: {e}")
-            continue
-        normalize_to_png_and_save(img, dst, longest_side=MAX_RESIZE)
-
-
 def has_unprocessed_files() -> bool:
-    """Check all user directories for any resized images not yet processed."""
-    try:
-        users = os.listdir(SHARED_DIR)
-    except OSError as e:
-        print(f"[has_unprocessed_files] cannot access {SHARED_DIR}: {e}")
+    """Check S3 for any resized images not yet processed."""
+    if not (s3_client and S3_BUCKET):
         return False
+    resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Delimiter="/")
+    users = [p["Prefix"].strip("/") for p in resp.get("CommonPrefixes", [])]
     for user in users:
-        _ensure_resized_from_input(user)
-        resized_dir = os.path.join(SHARED_DIR, user, "resized")
-        if not os.path.isdir(resized_dir):
-            continue
-        try:
-            files = [f for f in os.listdir(resized_dir) if f.lower().endswith(".png")]
-        except OSError as e:
-            print(f"[has_unprocessed_files] cannot access {resized_dir}: {e}")
-            continue
-        if not files:
-            continue
-        processed_file = os.path.join(SHARED_DIR, user, "output", "processed.json")
         processed = set()
-        if os.path.exists(processed_file):
-            try:
-                with open(processed_file, "r") as f:
-                    processed = set(json.load(f))
-            except Exception:
-                pass
-        for f in files:
-            if os.path.splitext(f)[0] not in processed:
+        proc_key = f"{user}/output/processed.json"
+        try:
+            obj = s3_client.get_object(Bucket=S3_BUCKET, Key=proc_key)
+            processed = set(json.loads(obj["Body"].read()))
+        except Exception:
+            pass
+        resp2 = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=f"{user}/resized/")
+        for item in resp2.get("Contents", []):
+            fname = os.path.basename(item["Key"])
+            if not fname.lower().endswith(".png"):
+                continue
+            stem, _ = os.path.splitext(fname)
+            if stem not in processed:
                 return True
     return False
 
@@ -396,17 +336,14 @@ def require_login():
 # -------------------------
 # Helpers
 # -------------------------
-def normalize_to_png_and_save(pil_img: Image.Image, out_path_png: str, longest_side: int | None = None) -> None:
-    """Optionally resize to longest_side, then save as PNG (preserve alpha if present).
-
-    Ensures the parent directory for ``out_path_png`` exists so uploads do not
-    fail when per-user folders haven't been created yet.
-    """
-    os.makedirs(os.path.dirname(out_path_png), exist_ok=True)
+def normalize_to_png_bytes(pil_img: Image.Image, longest_side: int | None = None) -> bytes:
+    """Optionally resize to longest_side and return PNG bytes."""
     img = pil_img.convert("RGBA")
     if longest_side and max(img.size) > longest_side:
         img.thumbnail((longest_side, longest_side), Image.LANCZOS)
-    img.save(out_path_png, "PNG")
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
 
 
 def detect_paper_crop(bgr: np.ndarray) -> np.ndarray | None:
@@ -456,20 +393,21 @@ def detect_paper_crop(bgr: np.ndarray) -> np.ndarray | None:
     return cv2.warpPerspective(bgr, M, (dst_w, dst_h))
 
 
-def load_crops_index() -> Dict[str, List[str]]:
-    if os.path.exists(CROPS_INDEX):
-        try:
-            with open(CROPS_INDEX, "r") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+def load_crops_index(username: str) -> Dict[str, List[str]]:
+    if not (s3_client and S3_BUCKET):
+        return {}
+    key = f"{username}/output/crops/index.json"
+    try:
+        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+        return json.loads(obj["Body"].read())
+    except Exception:
+        return {}
 
-def save_crops_index(index: Dict[str, List[str]]) -> None:
-    tmp_path = CROPS_INDEX + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(index, f, indent=2)
-    os.replace(tmp_path, CROPS_INDEX)
+def save_crops_index(index: Dict[str, List[str]], username: str) -> None:
+    if not (s3_client and S3_BUCKET):
+        return
+    key = f"{username}/output/crops/index.json"
+    s3_client.put_object(Bucket=S3_BUCKET, Key=key, Body=json.dumps(index, indent=2))
 
 def ensure_settings_defaults() -> dict:
     print("setting defaults")
@@ -530,19 +468,20 @@ def make_rgba_crops(original_bgr: np.ndarray, mask_gray: np.ndarray) -> List[np.
 # -------------------------
 # Server2 (SageMaker) invocation
 # -------------------------
-def _mark_processed(stem: str) -> None:
+def _mark_processed(stem: str, username: str) -> None:
+    if not (s3_client and S3_BUCKET):
+        return
+    key = f"{username}/output/processed.json"
     processed = set()
-    if os.path.exists(PROCESSED_FILE):
-        try:
-            with open(PROCESSED_FILE, "r") as f:
-                processed.update(json.load(f))
-        except Exception:
-            pass
+    try:
+        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+        processed.update(json.loads(obj["Body"].read()))
+    except Exception:
+        pass
     processed.add(stem)
-    tmp = PROCESSED_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(sorted(processed), f)
-    os.replace(tmp, PROCESSED_FILE)
+    s3_client.put_object(
+        Bucket=S3_BUCKET, Key=key, Body=json.dumps(sorted(processed))
+    )
 
 
 def run_sagemaker_job(stem: str, username: str) -> None:
@@ -553,34 +492,14 @@ def run_sagemaker_job(stem: str, username: str) -> None:
     try:
         if not (SAGEMAKER_ENDPOINT and S3_BUCKET and s3_client and sm_client):
             return
-        set_user_dirs(username)
-        resized_path = os.path.join(RESIZED_DIR, f"{stem}.png")
-        if not os.path.exists(resized_path):
-            return
         print(f"[sagemaker] starting job for user {username} and file {stem}.png")
         input_key = f"{username}/resized/{stem}.png"
-        # Server2 expects the ``output`` parameter to be a directory prefix where
-        # all generated files are written.  Previously we provided a full object
-        # path which resulted in files being uploaded to an unexpected
-        # subdirectory and the subsequent download failing.  Supply only the
-        # prefix and download the expected mask file explicitly.
         output_prefix = f"{username}/output/"
-
-        if os.path.exists(resized_path):
-            try:
-                print(f"[sagemaker] uploading {resized_path} to s3://{S3_BUCKET}/{input_key}")
-                s3_client.upload_file(resized_path, S3_BUCKET, input_key)
-                print("[sagemaker] upload complete; invoking server2")
-            except Exception as e:
-                print(f"[sagemaker] upload failed: {e}")
-                return
-        else:
-            try:
-                s3_client.head_object(Bucket=S3_BUCKET, Key=input_key)
-                print(f"[sagemaker] using existing s3://{S3_BUCKET}/{input_key}")
-            except Exception as e:
-                print(f"[sagemaker] resized image missing: {e}")
-                return
+        try:
+            s3_client.head_object(Bucket=S3_BUCKET, Key=input_key)
+        except Exception as e:
+            print(f"[sagemaker] resized image missing: {e}")
+            return
 
         payload = {"s3": f"s3://{S3_BUCKET}/{input_key}", "output": f"s3://{S3_BUCKET}/{output_prefix}"}
         try:
@@ -600,19 +519,7 @@ def run_sagemaker_job(stem: str, username: str) -> None:
         except Exception as e:
             print(f"[sagemaker] invoke failed: {e}")
             return
-        local_mask = os.path.join(MASKS_DIR, f"{stem}_mask0.png")
-        mask_key = f"{output_prefix}{stem}_mask0.png"
-        try:
-            print(f"[sagemaker] downloading result s3://{S3_BUCKET}/{mask_key} to {local_mask}")
-            s3_client.download_file(S3_BUCKET, mask_key, local_mask)
-            print("[sagemaker] download complete; processing mask")
-        except Exception as e:
-            print(f"[sagemaker] download failed: {e}")
-            return
-        process_mask_file(local_mask)
-        _processed_mask_files.add(local_mask)
-        _mark_processed(stem)
-        print(f"[sagemaker] job complete for {stem}")
+        print(f"[sagemaker] job launched for {stem}")
     finally:
         _processing_jobs.discard(job_key)
 
@@ -656,8 +563,8 @@ def index():
 def upload():
     """
     - Accepts most image types (incl. HEIC/HEIF).
-    - Normalizes original to PNG in /input/<basename>.png
-    - Produces resized PNG (≤1024) in /resized/<basename>.png
+    - Uploads original PNG to S3 under <user>/input/<basename>.png
+    - Uploads resized PNG (≤1024) to S3 under <user>/resized/<basename>.png
     """
     if "file" not in request.files:
         return "No file part", 400
@@ -692,31 +599,30 @@ def upload():
     else:
         print("Paper detection: none found")
 
-    # Normalize original to PNG in /input (use cropped if available)
-    input_png = os.path.join(INPUT_DIR, f"{stem}.png")
-    normalize_to_png_and_save(pil_img, input_png, longest_side=None)  # keep original resolution
+    # Upload original, resized, and thumbnail images directly to S3
     if s3_client and S3_BUCKET:
         try:
+            input_bytes = normalize_to_png_bytes(pil_img, longest_side=None)
             s3_key = f"{username}/input/{stem}.png"
-            s3_client.upload_file(input_png, S3_BUCKET, s3_key)
+            s3_client.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=input_bytes)
             print(f"[upload] uploaded original to s3://{S3_BUCKET}/{s3_key}")
         except Exception as e:
             print(f"[upload] failed to upload original: {e}")
 
-    # Also save a resized (≤1024) copy for SAM in /resized (same basename)
-    resized_png = os.path.join(RESIZED_DIR, f"{stem}.png")
-    normalize_to_png_and_save(pil_img, resized_png, longest_side=MAX_RESIZE)
-    if s3_client and S3_BUCKET:
         try:
+            resized_bytes = normalize_to_png_bytes(pil_img, longest_side=MAX_RESIZE)
             s3_resized_key = f"{username}/resized/{stem}.png"
-            s3_client.upload_file(resized_png, S3_BUCKET, s3_resized_key)
+            s3_client.put_object(Bucket=S3_BUCKET, Key=s3_resized_key, Body=resized_bytes)
             print(f"[upload] uploaded resized to s3://{S3_BUCKET}/{s3_resized_key}")
         except Exception as e:
             print(f"[upload] failed to upload resized: {e}")
 
-    # Save a smaller thumbnail for quick listing in /thumbs
-    thumb_png = os.path.join(THUMBS_DIR, f"{stem}.png")
-    normalize_to_png_and_save(pil_img, thumb_png, longest_side=256)
+        try:
+            thumb_bytes = normalize_to_png_bytes(pil_img, longest_side=256)
+            s3_thumb_key = f"{username}/output/thumbs/{stem}.png"
+            s3_client.put_object(Bucket=S3_BUCKET, Key=s3_thumb_key, Body=thumb_bytes)
+        except Exception as e:
+            print(f"[upload] failed to upload thumb: {e}")
 
     if SAGEMAKER_ENDPOINT and S3_BUCKET:
         threading.Thread(
@@ -727,82 +633,61 @@ def upload():
 
     return jsonify({"status": "ok", "original": f"{stem}.png"})
 
-# --- serve originals (normalized PNGs) ---
-# Serve originals directly from /mnt/shared/input
+# --- serve originals and thumbs via S3 presigned URLs ---
 @app.route("/input/<path:filename>", methods=["GET"])
 def serve_input(filename):
-    return send_from_directory(INPUT_DIR, filename)
+    username = session.get("user", "shared")
+    key = f"{username}/input/{filename}"
+    url = s3_client.generate_presigned_url(
+        "get_object", Params={"Bucket": S3_BUCKET, "Key": key}, ExpiresIn=3600
+    )
+    return redirect(url)
 
 @app.route("/thumbs/<path:filename>", methods=["GET"])
 def serve_thumb(filename):
-    return send_from_directory(THUMBS_DIR, filename)
+    username = session.get("user", "shared")
+    key = f"{username}/output/thumbs/{filename}"
+    url = s3_client.generate_presigned_url(
+        "get_object", Params={"Bucket": S3_BUCKET, "Key": key}, ExpiresIn=3600
+    )
+    return redirect(url)
 
-# Albums: originals (from /input) + their crops (from crops index)
+# Albums: originals (from S3) + their crops (from index)
 @app.route("/list_originals", methods=["GET"])
 def list_originals():
-    """
-    Returns:
-    [
-      {
-        "original": "penguin.png",
-        "original_url": "/input/penguin.png",
-        "thumb_url": "/thumbs/penguin.png",
-        "crops": [
-          {"file": "penguin_mask0.png", "url": "/crops/penguin_mask0.png", "thumb_url": "/thumbs/penguin_mask0.png"},
-          ...
-        ]
-      },
-      ...
-    ]
-    """
-    index = load_crops_index()   # { "penguin.png": ["penguin_mask0.png", ...], ... }
+    username = session.get("user", "shared")
+    index = load_crops_index(username)
     albums = []
-
-    # Include every normalized original (PNG) in INPUT_DIR
-    try:
-        input_files = sorted(os.listdir(INPUT_DIR))
-    except OSError as e:
-        print(f"[albums] cannot access {INPUT_DIR}: {e}")
-        input_files = []
-    for f in input_files:
-        if not f.lower().endswith(".png"):
+    resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=f"{username}/input/")
+    for item in resp.get("Contents", []):
+        if not item["Key"].lower().endswith(".png"):
             continue
+        f = os.path.basename(item["Key"])
         crop_files = index.get(f, [])
         crops = []
         for c in crop_files:
-            crop_path = os.path.join(CROPS_DIR, c)
-            area = 0
-            try:
-                img = cv2.imread(crop_path, cv2.IMREAD_UNCHANGED)
-                if img is not None:
-                    h, w = img.shape[:2]
-                    area = int(h * w)
-            except Exception:
-                pass
-            thumb_url = f"/thumbs/{c}" if os.path.exists(os.path.join(THUMBS_DIR, c)) else f"/crops/{c}"
-            crops.append({"file": c, "url": f"/crops/{c}", "thumb_url": thumb_url, "area": area})
-
-        points_info = None
-        base_name = os.path.splitext(f)[0]
-        pts_path = os.path.join(POINTS_DIR, f"{base_name}.json")
-        if os.path.exists(pts_path):
-            try:
-                with open(pts_path, "r") as pf:
-                    pts = json.load(pf)
-                if isinstance(pts, dict) and "points" in pts:
-                    points_info = pts
-            except Exception:
-                points_info = None
-
-        orig_thumb = f"/thumbs/{f}" if os.path.exists(os.path.join(THUMBS_DIR, f)) else f"/input/{f}"
-        albums.append({
-            "original": f,
-            "original_url": f"/input/{f}",
-            "thumb_url": orig_thumb,
-            "crops": crops,
-            "yolo": points_info
-        })
-
+            crop_url = s3_client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": S3_BUCKET, "Key": f"{username}/output/crops/{c}"},
+                ExpiresIn=3600,
+            )
+            thumb_url = s3_client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": S3_BUCKET, "Key": f"{username}/output/thumbs/{c}"},
+                ExpiresIn=3600,
+            )
+            crops.append({"file": c, "url": crop_url, "thumb_url": thumb_url})
+        orig_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": f"{username}/input/{f}"},
+            ExpiresIn=3600,
+        )
+        thumb_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": f"{username}/output/thumbs/{f}"},
+            ExpiresIn=3600,
+        )
+        albums.append({"original": f, "original_url": orig_url, "thumb_url": thumb_url, "crops": crops})
     return jsonify(albums)
 
 
@@ -836,81 +721,76 @@ def get_settings():
 # -------------------------
 @app.route("/crops/<path:filename>", methods=["GET"])
 def serve_crop(filename):
-    return send_from_directory(CROPS_DIR, filename)
+    username = session.get("user", "shared")
+    key = f"{username}/output/crops/{filename}"
+    url = s3_client.generate_presigned_url(
+        "get_object", Params={"Bucket": S3_BUCKET, "Key": key}, ExpiresIn=3600
+    )
+    return redirect(url)
 
 @app.route("/list_crops", methods=["GET"])
 def list_crops():
     """
     Returns JSON like:
     [
-      { "file": "penguin_mask0.png", "url": "/crops/penguin_mask0.png", "original": "penguin.png" },
+      { "file": "penguin_mask0.png", "url": "<presigned>", "original": "penguin.png" },
       ...
     ]
     """
-    index = load_crops_index()
+    username = session.get("user", "shared")
+    index = load_crops_index(username)
     items = []
     for original, crops in index.items():
         for c in crops:
-            items.append({
-                "file": c,
-                "url": f"/crops/{c}",
-                "original": original
-            })
+            url = s3_client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": S3_BUCKET, "Key": f"{username}/output/crops/{c}"},
+                ExpiresIn=3600,
+            )
+            items.append({"file": c, "url": url, "original": original})
     return jsonify(items)
 
 
 @app.route("/clear_all", methods=["POST"])
 def clear_all():
     """Remove all processed images and trackers."""
-    dirs = [INPUT_DIR, RESIZED_DIR, MASKS_DIR, CROPS_DIR, SMALLS_DIR, THUMBS_DIR]
-    for d in dirs:
-        try:
-            names = os.listdir(d)
-        except OSError as e:
-            print(f"[clear_all] cannot access {d}: {e}")
-            continue
-        for name in names:
-            path = os.path.join(d, name)
-            try:
-                if os.path.isfile(path) or os.path.islink(path):
-                    os.remove(path)
-                else:
-                    shutil.rmtree(path)
-            except Exception:
-                pass
-    for f in [CROPS_INDEX, PROCESSED_FILE]:
-        try:
-            if os.path.exists(f):
-                os.remove(f)
-        except Exception:
-            pass
+    username = session.get("user", "shared")
+    if s3_client and S3_BUCKET:
+        paginator = s3_client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"{username}/"):
+            keys = [obj["Key"] for obj in page.get("Contents", [])]
+            if keys:
+                s3_client.delete_objects(
+                    Bucket=S3_BUCKET, Delete={"Objects": [{"Key": k} for k in keys]}
+                )
     _processed_mask_files.clear()
     return jsonify({"status": "cleared"})
 
 # -------------------------
 # Mask watcher → cropper (runs in background)
 # -------------------------
-def process_mask_file(mask_path: str):
+def process_mask_file(mask_key: str, username: str):
     """
-    Given a mask PNG path like .../masks/<stem>_maskN.png
-    - find /input/<stem>.png
-    - create RGBA crop
-    - save to /crops/<stem>_maskN.png
-    - update index.json association
+    Given a mask object key like user/output/masks/<stem>_maskN.png:
+    - download original and mask from S3
+    - create RGBA crops and thumbnails
+    - upload results back to S3 and update index
     """
-    fname = os.path.basename(mask_path)
+    fname = os.path.basename(mask_key)
     if "_mask" not in fname:
         return
 
     base = fname.split("_mask")[0]                # stem
-    original_png = os.path.join(INPUT_DIR, f"{base}.png")
-    if not os.path.exists(original_png):
-        # original not found; skip
+    try:
+        orig_obj = s3_client.get_object(Bucket=S3_BUCKET, Key=f"{username}/input/{base}.png")
+        mask_obj = s3_client.get_object(Bucket=S3_BUCKET, Key=mask_key)
+    except Exception:
         return
 
-    # Load original + mask
-    orig_bgr = cv2.imread(original_png, cv2.IMREAD_COLOR)
-    mask_gray = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+    orig_bytes = orig_obj["Body"].read()
+    mask_bytes = mask_obj["Body"].read()
+    orig_bgr = cv2.imdecode(np.frombuffer(orig_bytes, np.uint8), cv2.IMREAD_COLOR)
+    mask_gray = cv2.imdecode(np.frombuffer(mask_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
     if orig_bgr is None or mask_gray is None:
         return
 
@@ -918,18 +798,19 @@ def process_mask_file(mask_path: str):
     if not crops:
         return
 
-    index = load_crops_index()
+    index = load_crops_index(username)
     crops_for_original = index.get(f"{base}.png", [])
     for idx, crop_rgba in enumerate(crops):
         out_name = fname[:-4] + f"_{idx}.png"
-        out_path = os.path.join(CROPS_DIR, out_name)
-        cv2.imwrite(out_path, crop_rgba)  # PNG with alpha
+        _, buf = cv2.imencode(".png", crop_rgba)
+        crop_key = f"{username}/output/crops/{out_name}"
+        s3_client.put_object(Bucket=S3_BUCKET, Key=crop_key, Body=buf.tobytes())
 
-        # Save thumbnail for UI
         try:
             pil_crop = Image.fromarray(cv2.cvtColor(crop_rgba, cv2.COLOR_BGRA2RGBA))
-            thumb_path = os.path.join(THUMBS_DIR, out_name)
-            normalize_to_png_and_save(pil_crop, thumb_path, longest_side=256)
+            thumb_bytes = normalize_to_png_bytes(pil_crop, longest_side=256)
+            thumb_key = f"{username}/output/thumbs/{out_name}"
+            s3_client.put_object(Bucket=S3_BUCKET, Key=thumb_key, Body=thumb_bytes)
         except Exception:
             pass
 
@@ -937,37 +818,32 @@ def process_mask_file(mask_path: str):
             crops_for_original.append(out_name)
 
     index[f"{base}.png"] = crops_for_original
-    save_crops_index(index)
+    save_crops_index(index, username)
+    _mark_processed(base, username)
 
 def resized_watcher_loop():
     while True:
         try:
-            try:
-                users = os.listdir(USER_BASE)
-            except OSError as e:
-                print(f"[resized_watcher] cannot access {SHARED_DIR}: {e}")
+            if not (s3_client and S3_BUCKET):
                 time.sleep(0.5)
                 continue
+            resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Delimiter="/")
+            users = [p["Prefix"].strip("/") for p in resp.get("CommonPrefixes", [])]
             for user in users:
-                print(f'looking through {user} directory')
-                resized_dir = os.path.join(SHARED_DIR, user, "resized")
-                if not os.path.isdir(resized_dir):
-                    continue
-                processed_file = os.path.join(SHARED_DIR, user, "output", "processed.json")
                 processed = set()
-                if os.path.exists(processed_file):
-                    try:
-                        with open(processed_file, "r") as f:
-                            processed = set(json.load(f))
-                    except Exception:
-                        pass
+                proc_key = f"{user}/output/processed.json"
                 try:
-                    files = [f for f in os.listdir(resized_dir) if f.lower().endswith(".png")]
-                except OSError as e:
-                    print(f"[resized_watcher] cannot access {resized_dir}: {e}")
-                    continue
-                for fname in files:
-                    print(f'found {fname} and launching a thread with run_sagemaker_job using arguments {stem} and {user}')
+                    obj = s3_client.get_object(Bucket=S3_BUCKET, Key=proc_key)
+                    processed = set(json.loads(obj["Body"].read()))
+                except Exception:
+                    pass
+                resp2 = s3_client.list_objects_v2(
+                    Bucket=S3_BUCKET, Prefix=f"{user}/resized/"
+                )
+                for item in resp2.get("Contents", []):
+                    fname = os.path.basename(item["Key"])
+                    if not fname.lower().endswith(".png"):
+                        continue
                     stem, _ = os.path.splitext(fname)
                     key = (user, stem)
                     if stem in processed or key in _processing_jobs:
@@ -984,34 +860,27 @@ def resized_watcher_loop():
 def mask_watcher_loop():
     while True:
         try:
-            try:
-                users = os.listdir(SHARED_DIR)
-            except OSError as e:
-                print(f"[mask_watcher] cannot access {SHARED_DIR}: {e}")
+            if not (s3_client and S3_BUCKET):
                 time.sleep(0.5)
                 continue
+            resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Delimiter="/")
+            users = [p["Prefix"].strip("/") for p in resp.get("CommonPrefixes", [])]
             for user in users:
-                mask_dir = os.path.join(SHARED_DIR, user, "output", "masks")
-                if not os.path.isdir(mask_dir):
-                    continue
-                try:
-                    mask_files = os.listdir(mask_dir)
-                except OSError as e:
-                    print(f"[mask_watcher] cannot access {mask_dir}: {e}")
-                    continue
-                for fname in mask_files:
+                resp2 = s3_client.list_objects_v2(
+                    Bucket=S3_BUCKET, Prefix=f"{user}/output/masks/"
+                )
+                for item in resp2.get("Contents", []):
+                    fname = os.path.basename(item["Key"])
                     if not fname.lower().endswith(".png"):
                         continue
-                    fpath = os.path.join(mask_dir, fname)
-                    if fpath in _processed_mask_files:
+                    key = item["Key"]
+                    if key in _processed_mask_files:
                         continue
-                    set_user_dirs(user)
-                    process_mask_file(fpath)
-                    _processed_mask_files.add(fpath)
+                    process_mask_file(key, user)
+                    _processed_mask_files.add(key)
         except Exception as e:
-            # Keep the watcher alive even if one file causes an error
             print(f"[mask_watcher] error: {e}")
-        time.sleep(0.5)  # light polling
+        time.sleep(0.5)
 
 # Start background watcher before serving
 threading.Thread(target=resized_watcher_loop, daemon=True).start()
