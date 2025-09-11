@@ -276,7 +276,7 @@
       layer.destroyChildren();
       layer.add(tr);
       layer.batchDraw();
-      refreshAlbums();
+      await refreshAlbums();
     });
 
     // ---------- albums (originals + crops) ----------
@@ -304,6 +304,13 @@
           </div>
           <div class="arrow" style="margin-left:auto;color:var(--sub);">${arrow}</div>
         `;
+
+        // clicking the thumbnail adds the original image to the canvas
+        const thumbImg = head.querySelector(".thumb");
+        thumbImg.addEventListener("click", e => {
+          e.stopPropagation();
+          addToCanvas(a.original_url);
+        });
 
         // overlay YOLO points as stars on thumbnail
         if(a.yolo && a.yolo.points && a.yolo.points.length){
