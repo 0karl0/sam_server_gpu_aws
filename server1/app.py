@@ -792,18 +792,22 @@ def list_crops():
     return jsonify(items)
 
 
+def _delete_user_s3_data(username: str) -> None:
+    """Delete all S3 objects belonging to ``username``."""
+    if not (s3_client and S3_BUCKET):
+        return
+    paginator = s3_client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"{username}/"):
+        objs = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+        if objs:
+            s3_client.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": objs})
+
+
 @app.route("/clear_all", methods=["POST"])
 def clear_all():
-    """Remove all processed images and trackers."""
+    """Remove all processed images and clear the user's S3 storage."""
     username = session.get("user", "shared")
-    if s3_client and S3_BUCKET:
-        paginator = s3_client.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"{username}/"):
-            keys = [obj["Key"] for obj in page.get("Contents", [])]
-            if keys:
-                s3_client.delete_objects(
-                    Bucket=S3_BUCKET, Delete={"Objects": [{"Key": k} for k in keys]}
-                )
+    _delete_user_s3_data(username)
     _processed_mask_files.clear()
     return jsonify({"status": "cleared"})
 
