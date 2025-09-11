@@ -117,9 +117,17 @@ USER_LOGGED_IN = False
 _last_work_time = time.time()
 
 print("getting sage")
-secret = get_single_secret_value("sagemaker-endpoint") #os.getenv("SAGEMAKER_ENDPOINT","sam-server2-endpoint")
+secret = get_single_secret_value("sagemaker-endpoint")  # os.getenv("SAGEMAKER_ENDPOINT","sam-server2-endpoint")
 
-SAGEMAKER_ENDPOINT =secret["SecretString"]
+secret_str = secret["SecretString"]
+# SecretString may be a JSON blob like {"SAGEMAKER_ENDPOINT": "name"}
+# so try to decode it; fallback to the raw string if decoding fails.
+try:
+    secret_dict = json.loads(secret_str)
+    SAGEMAKER_ENDPOINT = secret_dict.get("SAGEMAKER_ENDPOINT", secret_str)
+except json.JSONDecodeError:
+    SAGEMAKER_ENDPOINT = secret_str
+
 print(f'sagemaker_endpoint: {SAGEMAKER_ENDPOINT}')
 SAGEMAKER_VARIANT = os.getenv("SAGEMAKER_VARIANT", "AllTraffic")
 print("getting s3")
