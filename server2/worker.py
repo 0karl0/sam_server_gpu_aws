@@ -12,11 +12,19 @@ from typing import Dict
 from botocore.exceptions import ClientError
 from PIL import Image
 from rembg import remove, new_session
-from segment_anything import (
-    SamAutomaticMaskGenerator,
-    SamPredictor,
-    sam_model_registry,
-)
+
+# ``segment_anything`` is optional and only required when SAM is enabled.
+try:  # pragma: no cover - segment_anything may not be installed
+    from segment_anything import (
+        SamAutomaticMaskGenerator,
+        SamPredictor,
+        sam_model_registry,
+    )
+    _SAM_AVAILABLE = True
+except Exception:  # pragma: no cover - missing dependency
+    SamAutomaticMaskGenerator = SamPredictor = sam_model_registry = None  # type: ignore
+    _SAM_AVAILABLE = False
+    logger.warning("segment_anything not available")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,6 +52,7 @@ except Exception:  # pragma: no cover - torch may not be installed
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 s3_client = boto3.client("s3", region_name=AWS_REGION)
 S3_BUCKET = os.getenv("S3_BUCKET")
+USE_SAM = os.getenv("USE_SAM", "0").lower() in ("1", "true", "yes")
 
 
 def get_single_secret_value(secret_name: str) -> dict:
@@ -426,27 +435,30 @@ def save_processed_set(processed_set, processed_file: str):
 # -------------------------
 # Load SAM model
 # -------------------------
-if not os.path.exists(MODEL_PATH):
-    logger.info("SAM model not found at %s", MODEL_PATH)
-    try:
-        logger.info(
-            "downloading SAM model from sam-server-shared-1757292440 to %s",
-            MODEL_PATH,
-        )
-        s3_client.download_file(
-            "sam-server-shared-1757292440",
-            "models/vit_l.pth",
-            MODEL_PATH,
-        )
-        logger.info("SAM model downloaded to %s", MODEL_PATH)
-    except ClientError as e:  # pragma: no cover - network/permission issues
-        logger.error("[s3] failed to download SAM model: %s", e)
+sam = None
+if USE_SAM and _SAM_AVAILABLE:
+    if not os.path.exists(MODEL_PATH):
+        logger.info("SAM model not found at %s", MODEL_PATH)
+        try:
+            logger.info(
+                "downloading SAM model from sam-server-shared-1757292440 to %s",
+                MODEL_PATH,
+            )
+            s3_client.download_file(
+                "sam-server-shared-1757292440",
+                "models/vit_l.pth",
+                MODEL_PATH,
+            )
+            logger.info("SAM model downloaded to %s", MODEL_PATH)
+        except ClientError as e:  # pragma: no cover - network/permission issues
+            logger.error("[s3] failed to download SAM model: %s", e)
+    else:
+        logger.info("SAM model found at %s", MODEL_PATH)
+    logger.debug("Files in models dir %s: %s", MODELS_DIR, os.listdir(MODELS_DIR))
+    sam = sam_model_registry["vit_l"](checkpoint=MODEL_PATH)
+    sam.to(DEVICE)
 else:
-    logger.info("SAM model found at %s", MODEL_PATH)
-logger.debug("Files in models dir %s: %s", MODELS_DIR, os.listdir(MODELS_DIR))
-
-sam = sam_model_registry["vit_l"](checkpoint=MODEL_PATH)
-sam.to(DEVICE)
+    logger.info("SAM disabled")
 
 # -------------------------
 # Helper functions
@@ -577,8 +589,8 @@ def process_new_images(username: str) -> int:
             if img is None:
                 continue
             simple = _is_line_drawing(img) or _has_long_lines(img)
-            yolo_points = [] if simple else _get_yolo_points(file_path, dirs["boxes"])
-            if simple or not yolo_points:
+            yolo_points = [] if simple or not USE_SAM else _get_yolo_points(file_path, dirs["boxes"])
+            if simple or not yolo_points or not USE_SAM:
                 logger.info("[Worker] Using BirefNet for segmentation")
                 mask = _refine_mask_with_birefnet(img)
                 crops = _crop_with_mask(img, mask)
