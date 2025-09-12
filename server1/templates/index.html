@@ -5,6 +5,9 @@
   <title>SAM Studio</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://cdn.jsdelivr.net/npm/konva@9/konva.min.js"></script>
+  <!-- React for component-based UI rendering -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <style>
     :root{
       --bg:#0b0c10; --panel:#12141a; --muted:#1a1d25; --text:#e9eef7; --sub:#9fb0c7;
@@ -174,6 +177,18 @@
   </main>
 
   <script>
+    // React component to render a single thumbnail chip
+    function Thumb(props){
+      const c = props.crop;
+      return React.createElement("div", {className: "chip"},
+        React.createElement("img", {
+          src: c.thumb_url,
+          alt: c.file,
+          title: "Add to canvas",
+          onClick: function(){ addToCanvas(c.url); }
+        })
+      );
+    }
     // ---------- settings ----------
     async function loadSettings(){
       const r = await fetch("/get_settings"); const s = await r.json();
@@ -347,16 +362,12 @@
           const empty=document.createElement("div"); empty.className="chip"; empty.textContent="No clippings yet.";
           chips.appendChild(empty);
         }else{
-          a.crops.forEach(c=>{
-            const chip=document.createElement("div"); chip.className="chip";
-            const img=document.createElement("img");
-            img.src = c.thumb_url;
-            img.alt = c.file;
-            img.title = "Add to canvas";
-            // c.url points to the full-resolution clip; add it to the canvas when clicked
-            img.addEventListener("click", () => addToCanvas(c.url));
-            chip.appendChild(img); chips.appendChild(chip);
-          });
+          const root = ReactDOM.createRoot(chips);
+          root.render(
+            React.createElement(React.Fragment, null,
+              a.crops.map(c => React.createElement(Thumb, {key: c.file, crop: c}))
+            )
+          );
         }
         body.appendChild(chips);
 

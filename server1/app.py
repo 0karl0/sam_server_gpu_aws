@@ -368,12 +368,13 @@ def require_login():
 # Helpers
 # -------------------------
 def normalize_to_png_bytes(pil_img: Image.Image, longest_side: int | None = None) -> bytes:
-    """Optionally resize to longest_side and return PNG bytes."""
+    """Optionally resize to longest_side and return an optimized PNG bytestring."""
     img = pil_img.convert("RGBA")
     if longest_side and max(img.size) > longest_side:
         img.thumbnail((longest_side, longest_side), Image.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, "PNG")
+    # optimize=True reduces file size without altering pixel data
+    img.save(buf, "PNG", optimize=True)
     return buf.getvalue()
 
 
