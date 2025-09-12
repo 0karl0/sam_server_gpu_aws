@@ -6,7 +6,14 @@ import cv2
 from flask import Flask, jsonify, request
 import logging
 
-from worker import generate_masks, save_masks, load_settings
+from worker import (
+    generate_masks,
+    save_masks,
+    load_settings,
+    _refine_mask_with_birefnet,
+)
+
+USE_SAM = os.getenv("USE_SAM", "0").lower() in ("1", "true", "yes")
 
 s3 = boto3.client("s3")
 app = Flask(__name__)
@@ -45,9 +52,15 @@ def invoke():
     if img is None:
         return jsonify({"error": "failed to read image"}), 400
 
-    # Run SAM-based segmentation.
-    settings = load_settings("/tmp/nonexistent.json")
-    masks, image = generate_masks(str(local_path), settings)
+    if USE_SAM:
+        # Run SAM-based segmentation.
+        settings = load_settings("/tmp/nonexistent.json")
+        masks, image = generate_masks(str(local_path), settings)
+    else:
+        logger.info("[invoke] Using BirefNet for segmentation")
+        mask = _refine_mask_with_birefnet(img)
+        masks = [{"segmentation": mask}]
+        image = img
     base = local_path.stem
     masks_dir = Path("/tmp/masks")
     masks_dir.mkdir(parents=True, exist_ok=True)
