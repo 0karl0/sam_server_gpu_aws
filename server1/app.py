@@ -696,12 +696,14 @@ def list_originals():
         crops = []
         for c in crop_files:
             crop_key = f"{username}/output/crops/{c}"
-            area = 0
+            thumb_key = f"{username}/output/thumbs/{c}"
             try:
                 head = s3_client.head_object(Bucket=S3_BUCKET, Key=crop_key)
-                area = head.get("ContentLength", 0)
+                s3_client.head_object(Bucket=S3_BUCKET, Key=thumb_key)
             except Exception:
-                pass
+                # Skip entries whose crop or thumbnail no longer exist
+                continue
+            area = head.get("ContentLength", 0)
             crop_url = s3_client.generate_presigned_url(
                 "get_object",
                 Params={"Bucket": S3_BUCKET, "Key": crop_key},
@@ -709,10 +711,15 @@ def list_originals():
             )
             thumb_url = s3_client.generate_presigned_url(
                 "get_object",
-                Params={"Bucket": S3_BUCKET, "Key": f"{username}/output/thumbs/{c}"},
+                Params={"Bucket": S3_BUCKET, "Key": thumb_key},
                 ExpiresIn=3600,
             )
             crops.append({"file": c, "url": crop_url, "thumb_url": thumb_url, "area": area})
+
+        # Ignore originals that no longer have any valid crops
+        if not crops:
+            continue
+
         crops.sort(key=lambda x: x.get("area", 0), reverse=True)
         crops = crops[:MAX_CROPS_PER_IMAGE]
         orig_url = s3_client.generate_presigned_url(
@@ -720,6 +727,11 @@ def list_originals():
             Params={"Bucket": S3_BUCKET, "Key": f"{username}/input/{f}"},
             ExpiresIn=3600,
         )
+        try:
+            s3_client.head_object(Bucket=S3_BUCKET, Key=f"{username}/output/thumbs/{f}")
+        except Exception:
+            # Skip if original thumbnail missing
+            continue
         thumb_url = s3_client.generate_presigned_url(
             "get_object",
             Params={"Bucket": S3_BUCKET, "Key": f"{username}/output/thumbs/{f}"},

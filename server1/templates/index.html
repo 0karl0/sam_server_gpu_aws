@@ -185,7 +185,7 @@
           src: c.thumb_url,
           alt: c.file,
           title: "Add to canvas",
-          onClick: function(){ addToCanvas(c.url); }
+          onClick: () => addToCanvas(c.url)
         })
       );
     }
@@ -301,7 +301,8 @@
     let lastUserAction = 0;
 
     async function refreshAlbums(){
-      const r = await fetch("/list_originals"); const albums = await r.json();
+      const r = await fetch("/list_originals");
+      const albums = (await r.json()).filter(a => a.crops && a.crops.length);
       const host = document.getElementById("albums");
       host.innerHTML = "";
 
@@ -451,6 +452,13 @@
     img.onload = function(){
       placeImageOnCanvas(img, stage.width()/2 - img.width/2, stage.height()/2 - img.height/2);
     };
+    img.onerror = function(){
+      const fallback = new Image();
+      fallback.onload = function(){
+        placeImageOnCanvas(fallback, stage.width()/2 - fallback.width/2, stage.height()/2 - fallback.height/2);
+      };
+      fallback.src = url;
+    };
     img.src = url;
   }
 
@@ -461,6 +469,15 @@
       const x = Math.random() * Math.max(0, stage.width() - img.width);
       const y = Math.random() * Math.max(0, stage.height() - img.height);
       placeImageOnCanvas(img, x, y);
+    };
+    img.onerror = function(){
+      const fallback = new Image();
+      fallback.onload = function(){
+        const x = Math.random() * Math.max(0, stage.width() - fallback.width);
+        const y = Math.random() * Math.max(0, stage.height() - fallback.height);
+        placeImageOnCanvas(fallback, x, y);
+      };
+      fallback.src = url;
     };
     img.src = url;
   }
